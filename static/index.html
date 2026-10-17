@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>DVR • Câmera ao vivo</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot" aria-hidden="true"></span>
+      <strong>DVR</strong>
+      <span class="cam">/dev/video0</span>
+    </div>
+    <div class="meta">
+      <span id="live-badge" class="badge live">AO VIVO</span>
+      <span id="clock" class="clock">--:--:--</span>
+      <a class="btn ghost" href="/tunnel">Túnel ↗</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="player-wrap">
+      <video id="live-video" playsinline muted autoplay controls></video>
+      <div id="player-error" class="overlay hidden">Sem sinal da câmera…</div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Gravações (últimas 24 h)</h2>
+        <button id="refresh-recs" class="btn ghost small" type="button">Atualizar</button>
+      </div>
+      <ul id="recordings" class="rec-list">
+        <li class="empty">Carregando…</li>
+      </ul>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

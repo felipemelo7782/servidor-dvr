@@ -1,0 +1,14 @@
+# Dados gerados em tempo de execução
+recordings/
+hls/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Segredos e IDE
+.env
+.idea/
+.vscode/

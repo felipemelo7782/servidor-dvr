@@ -1,0 +1,13 @@
+# Nunca copiar dados de execução nem segredos para a imagem.
+recordings/
+hls/
+**/__pycache__/
+*.pyc
+.venv/
+venv/
+.git/
+.gitignore
+.env
+.env.example
+AGENTS.md
+README.md

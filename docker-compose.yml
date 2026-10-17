@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# docker-compose.yml — pronto para EasyPanel e para `docker compose up -d`.
+# NÃO usar a chave `version:` (obsoleta).
+#
+# Pré-requisitos no host Ubuntu 24.04:
+#   - /dev/video0 existe (webcam USB) e o usuário pertence ao grupo `video`.
+#   - Portas: apenas 2310 é publicada.
+#   - Credenciais em um arquivo .env ao lado deste arquivo (ver .env.example).
+# ---------------------------------------------------------------------------
+services:
+  dvr:
+    build: .
+    image: dvr-yoosee:latest
+    container_name: dvr-yoosee
+
+    ports:
+      - "2310:2310"
+
+    environment:
+      DVR_USER: ${DVR_USER:-admin}
+      DVR_PASSWORD: ${DVR_PASSWORD:-changeme}
+      TZ: ${TZ:-America/Sao_Paulo}
+      # Ajuste só se necessário:
+      # DVR_INPUT_FORMAT: mjpeg          # force o formato de captura da webcam
+      # DVR_RECORD_SOURCE: hls           # hls (padrão) | device
+      # DVR_TUNNEL_TTL: "14400"          # 4 h
+
+    volumes:
+      # Gravações persistentes no host (MP4). Cuidado com o tamanho em disco.
+      - ./recordings:/app/recordings
+
+    # Segmentos HLS são descartáveis: mantê-los em RAM evita desgaste do SSD.
+    tmpfs:
+      - /app/hls:size=64m,mode=1777
+
+    # Acesso à câmera. `group_add` cobre ambientes onde o processo não é root;
+    # NÃO usamos privileged: true.
+    devices:
+      - /dev/video0:/dev/video0
+    group_add:
+      - video
+
+    restart: unless-stopped

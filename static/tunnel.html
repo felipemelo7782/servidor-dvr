@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>DVR • Quick Tunnel</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot" aria-hidden="true"></span>
+      <strong>Quick Tunnel</strong>
+    </div>
+    <div class="meta">
+      <span id="clock" class="clock">--:--:--</span>
+      <a class="btn ghost" href="/">← Ao vivo</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel narrow">
+      <div class="panel-head">
+        <h2>Túnel Cloudflare</h2>
+        <label class="switch">
+          <input id="tunnel-toggle" type="checkbox">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <p class="hint">
+        Exponha este DVR temporariamente na internet. O link expira
+        automaticamente após 4 horas.
+      </p>
+
+      <div class="field-row">
+        <span class="label">Status</span>
+        <span id="tunnel-state" class="state off">Desligado</span>
+      </div>
+
+      <div class="field-row">
+        <span class="label">Expira em</span>
+        <span id="tunnel-timer" class="timer">—</span>
+      </div>
+
+      <div class="field-col">
+        <label class="label" for="tunnel-url">Link público</label>
+        <div class="copy-row">
+          <input id="tunnel-url" type="text" readonly placeholder="Nenhum link ativo">
+          <button id="copy-url" class="btn small" type="button" disabled>Copiar link</button>
+        </div>
+      </div>
+
+      <p class="hint warn">
+        Ao ligar o túnel, o link fica acessível publicamente (protegido por
+        usuário e senha).
+      </p>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,116 @@
+"""Pipeline HLS ao vivo.
+
+Um único processo FFmpeg persistente lê /dev/video0 e escreve segmentos HLS em
+``HLS_DIR/stream.m3u8``. Um watchdog reinicia o processo se ele morrer (câmera
+desconectada, erro de driver, etc.).
+
+Este é o ÚNICO processo que abre a câmera. O gravador (recorder.py) consome o
+HLS gerado aqui em vez de abrir /dev/video0 de novo — webcams USB (uvcvideo)
+normalmente só permitem um consumidor por vez.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from typing import Optional
+
+from . import config
+from .procutils import terminate_process
+
+log = logging.getLogger("dvr.streamer")
+
+RESTART_DELAY = 3.0  # segundos entre tentativas (evita loop apertado))
+
+
+class HlsStreamer:
+    def __init__(self) -> None:
+        self._proc: Optional[asyncio.subprocess.Process] = None
+        self._watchdog: Optional[asyncio.Task] = None
+        self._stderr_task: Optional[asyncio.Task] = None
+        self._running = False
+
+    def command(self) -> list[str]:
+        """Monta o comando FFmpeg do HLS ao vivo."""
+        fmt = ["-input_format", config.INPUT_FORMAT] if config.INPUT_FORMAT else []
+        gop = max(1, config.FRAMERATE * 2)  # ~1 keyframe a cada 2 s (hls_time)
+        return [
+            "ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin",
+            "-f", "v4l2", *fmt,
+            "-framerate", str(config.FRAMERATE),
+            "-video_size", config.VIDEO_SIZE,
+            "-i", config.VIDEO_DEVICE,
+            "-an",
+            "-c:v", "libx264",
+            "-preset", config.X264_PRESET_LIVE,
+            "-tune", "zerolatency",
+            "-r", str(config.FRAMERATE),
+            "-s", config.VIDEO_SIZE,
+            "-b:v", config.VIDEO_BITRATE,
+            "-g", str(gop),
+            "-f", "hls",
+            "-hls_time", "2",
+            "-hls_list_size", "5",
+            # delete_segments: mantém a playlist curta (baixo uso de disco).
+            "-hls_flags", "delete_segments+append_list",
+            "-hls_segment_filename", str(config.HLS_DIR / "seg_%03d.ts"),
+            str(config.HLS_DIR / "stream.m3u8"),
+        ]
+
+    async def start(self) -> None:
+        config.HLS_DIR.mkdir(parents=True, exist_ok=True)
+        if self._running:
+            return
+        self._running = True
+        await self._spawn()
+        self._watchdog = asyncio.create_task(self._guard(), name="hls-watchdog")
+
+    async def _spawn(self) -> None:
+        if not os.path.exists(config.VIDEO_DEVICE):
+            log.error("Dispositivo %s ausente; stream HLS não iniciado", config.VIDEO_DEVICE)
+            self._proc = None
+            return
+        cmd = self.command()
+        log.info("Iniciando FFmpeg HLS: %s", " ".join(cmd))
+        try:
+            self._proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            log.error("ffmpeg não encontrado no PATH; stream HLS indisponível")
+            self._proc = None
+            return
+        self._stderr_task = asyncio.create_task(self._drain(self._proc), name="hls-stderr")
+
+    async def _drain(self, proc: asyncio.subprocess.Process) -> None:
+        """Consome o stderr para não entupir o pipe (logs em nível debug)."""
+        assert proc.stderr is not None
+        async for raw in proc.stderr:
+            line = raw.decode(errors="replace").rstrip()
+            if line:
+                log.debug("[hls/ffmpeg] %s", line)
+
+    async def _guard(self) -> None:
+        """Reinicia o FFmpeg sempre que ele morrer, com backoff fixo."""
+        while self._running:
+            await asyncio.sleep(RESTART_DELAY)
+            if not self._running:
+                break
+            if self._proc is None or self._proc.returncode is not None:
+                code = None if self._proc is None else self._proc.returncode
+                log.warning("FFmpeg HLS encerrou (código=%s); reiniciando", code)
+                await self._spawn()
+
+    async def stop(self) -> None:
+        self._running = False
+        for task in (self._watchdog, self._stderr_task):
+            if task:
+                task.cancel()
+        self._watchdog = self._stderr_task = None
+        # Saída HLS não precisa de finalização; SIGTERM basta.
+        await terminate_process(self._proc, send_quit=False)
+        self._proc = None
+        log.info("FFmpeg HLS parado")

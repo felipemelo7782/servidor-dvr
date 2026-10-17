@@ -1,0 +1,5 @@
+# Normaliza quebras de linha: o projeto roda em container Linux.
+# Sem isso, um checkout com CRLF pode quebrar o Dockerfile e o FFmpeg.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
