@@ -11,7 +11,8 @@ services:
   dvr:
     build: .
     image: dvr-yoosee:latest
-    container_name: dvr-yoosee
+    # Sem `container_name`: o EasyPanel (e o próprio Compose) alertam que nomes
+    # fixos colidem entre projetos. O serviço continua acessível como `dvr`.
 
     ports:
       - "2310:2310"
