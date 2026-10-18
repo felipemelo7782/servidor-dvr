@@ -15,7 +15,7 @@ import logging
 import os
 from typing import Optional
 
-from . import config
+from . import config, imaging
 from .procutils import terminate_process
 
 log = logging.getLogger("dvr.streamer")
@@ -31,23 +31,38 @@ class HlsStreamer:
         self._running = False
 
     def command(self) -> list[str]:
-        """Monta o comando FFmpeg do HLS ao vivo."""
+        """Monta o comando FFmpeg do HLS ao vivo.
+
+        Os filtros de imagem (preset + DVR_VIDEO_FILTERS) entram aqui. Como a
+        gravação é um remux deste HLS, ela herda os mesmos filtros sem custo
+        extra de CPU.
+        """
         fmt = ["-input_format", config.INPUT_FORMAT] if config.INPUT_FORMAT else []
         gop = max(1, config.FRAMERATE * 2)  # ~1 keyframe a cada 2 s (hls_time)
-        return [
+        cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin",
             "-f", "v4l2", *fmt,
             "-framerate", str(config.FRAMERATE),
             "-video_size", config.VIDEO_SIZE,
             "-i", config.VIDEO_DEVICE,
             "-an",
+        ]
+        filters = imaging.build_filter_chain()
+        if filters:
+            cmd += ["-vf", filters]
+        cmd += [
             "-c:v", "libx264",
             "-preset", config.X264_PRESET_LIVE,
-            "-tune", "zerolatency",
+        ]
+        if config.X264_TUNE:
+            cmd += ["-tune", config.X264_TUNE]
+        cmd += [
             "-r", str(config.FRAMERATE),
             "-s", config.VIDEO_SIZE,
             "-b:v", config.VIDEO_BITRATE,
             "-g", str(gop),
+            # yuv420p garante reprodução em qualquer navegador/player.
+            "-pix_fmt", "yuv420p",
             "-f", "hls",
             "-hls_time", "2",
             "-hls_list_size", "5",
@@ -56,6 +71,7 @@ class HlsStreamer:
             "-hls_segment_filename", str(config.HLS_DIR / "seg_%03d.ts"),
             str(config.HLS_DIR / "stream.m3u8"),
         ]
+        return cmd
 
     async def start(self) -> None:
         config.HLS_DIR.mkdir(parents=True, exist_ok=True)

@@ -61,7 +61,11 @@ Acesse `http://IP-DO-SERVIDOR:2310`. O navegador pedirá usuário e senha
 | `DVR_INPUT_FORMAT` | *(vazio)* | Formato de captura (`mjpeg` resolve imagem preta/ruim) |
 | `DVR_VIDEO_SIZE` | `640x480` | Resolução |
 | `DVR_FRAMERATE` | `15` | FPS |
-| `DVR_VIDEO_BITRATE` | `800k` | Bitrate do H.264 |
+| `DVR_VIDEO_BITRATE` | `1200k` | Bitrate do H.264 |
+| `DVR_X264_TUNE` | `zerolatency` | Deixe vazio para melhor compressão (ao vivo ~1 s mais lento) |
+| `DVR_IMAGE_PRESET` | `none` | `none`/`night`/`ir`/`bright`/`sharp`/`mirror`/`flip`/`rotate180` |
+| `DVR_VIDEO_FILTERS` | *(vazio)* | Cadeia FFmpeg livre, ex.: `eq=saturation=1.2,unsharp=5:5:1.0` |
+| `DVR_V4L2_CTRLS` | *(vazio)* | Controles da câmera, ex.: `brightness=128,contrast=32` |
 | `DVR_SEGMENT_SECONDS` | `600` | Duração de cada arquivo gravado |
 | `DVR_RETENTION_SECONDS` | `86400` | Janela de retenção (24 h) |
 | `DVR_RECORD_SOURCE` | `hls` | `hls` (remux, recomendado) ou `device` |
@@ -75,6 +79,47 @@ Acesse `http://IP-DO-SERVIDOR:2310`. O navegador pedirá usuário e senha
 - **Túnel:** abra `http://IP:2310/tunnel`, ligue o toggle, aguarde a URL
   `https://…trycloudflare.com` e clique em **Copiar link**.
 - **Logs:** `docker compose logs -f dvr`.
+
+## Filtros de imagem e controles da câmera
+
+**Filtros digitais** (aplicados no encoder do HLS; a gravação herda por ser um
+remux, sem custo extra de CPU):
+
+```dotenv
+DVR_IMAGE_PRESET=ir          # none|night|ir|bright|sharp|mirror|flip|rotate180
+DVR_VIDEO_FILTERS=eq=saturation=1.2,unsharp=5:5:1.0   # opcional, soma ao preset
+```
+
+- `night` — clareia e reduz ruído (cena escura).
+- `ir` — alto contraste **sem cor**, simulando câmera com infravermelho ligado.
+- `mirror`/`flip`/`rotate180` — corrija a orientação da imagem.
+
+**Controles da câmera** (`v4l2-ctl`, dependem do que o driver expõe): consulte o
+que a sua webcam aceita em `http://IP:2310/api/camera/controls` e então configure:
+
+```dotenv
+DVR_V4L2_CTRLS=brightness=128,contrast=32,white_balance_automatic=1
+```
+
+> Um filtro de corte de infravermelho **físico** normalmente não é controlável por
+> software. Se a sua câmera expuser um controle de IR no `--list-ctrls`, ele
+> aparecerá nesse endpoint e poderá ser ajustado via `DVR_V4L2_CTRLS`.
+
+## Melhorar a qualidade da gravação
+
+Como a gravação é um remux do HLS, **a qualidade gravada = qualidade do HLS**.
+Ajuste por variáveis de ambiente:
+
+```dotenv
+DVR_VIDEO_SIZE=1280x720      # mais detalhe (use se o Celeron aguentar)
+DVR_VIDEO_BITRATE=2000k      # menos artefatos de compressão
+DVR_FRAMERATE=20
+DVR_X264_TUNE=               # vazio = melhor compressão, +~1s de latência no ao vivo
+```
+
+As gravações usam **MP4 fragmentado**, portanto abrem normalmente **mesmo
+enquanto estão sendo gravadas** e sobrevivem a reinícios. O segmento em
+andamento aparece como "● gravando" na lista.
 
 ## Decisões de design
 

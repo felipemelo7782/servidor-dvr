@@ -16,7 +16,7 @@ import shutil
 from datetime import datetime
 from typing import Optional
 
-from . import config
+from . import config, imaging
 from .procutils import terminate_process
 
 log = logging.getLogger("dvr.recorder")
@@ -60,14 +60,25 @@ class Recorder:
                 "-video_size", config.VIDEO_SIZE,
                 "-i", config.VIDEO_DEVICE,
             ]
-            venc = [
+            filters = imaging.build_filter_chain()
+            venc = []
+            if filters:
+                venc += ["-vf", filters]
+            venc += [
                 "-c:v", "libx264", "-preset", config.X264_PRESET_REC,
+            ]
+            if config.X264_TUNE:
+                venc += ["-tune", config.X264_TUNE]
+            venc += [
                 "-r", str(config.FRAMERATE),
                 "-s", config.VIDEO_SIZE,
                 "-b:v", config.VIDEO_BITRATE,
+                "-g", str(max(1, config.FRAMERATE * 2)),
+                "-pix_fmt", "yuv420p",
             ]
         else:
             # Loopback: lê o HLS local e apenas remuxa (-c copy) para MP4.
+            # Os filtros já vêm aplicados no HLS, então não há re-encode aqui.
             # Opções -reconnect* cobrem quedas/restart do stream ao vivo.
             inputs = [
                 "-reconnect", "1",
@@ -88,6 +99,12 @@ class Recorder:
             "-segment_time", str(config.SEGMENT_SECONDS),
             "-reset_timestamps", "1",
             "-segment_format", "mp4",
+            # MP4 FRAGMENTADO: o arquivo fica reproduzível mesmo enquanto está
+            # sendo gravado (não precisa esperar o segmento fechar) e sobrevive a
+            # quedas do processo. Sem isto, o segmento mais recente aparece na
+            # lista mas "não abre" — é o que acontecia antes.
+            "-segment_format_options",
+            "movflags=+frag_keyframe+empty_moov+default_base_moof",
             "-strftime", "1",
             str(config.RECORDINGS_DIR / "%Y-%m-%d_%H-%M-%S.mp4"),
         ]

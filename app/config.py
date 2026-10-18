@@ -39,9 +39,24 @@ VIDEO_DEVICE = os.getenv("VIDEO_DEVICE", "/dev/video0")
 INPUT_FORMAT = os.getenv("DVR_INPUT_FORMAT", "").strip()
 VIDEO_SIZE = os.getenv("DVR_VIDEO_SIZE", "640x480")
 FRAMERATE = int(os.getenv("DVR_FRAMERATE", "15"))
-VIDEO_BITRATE = os.getenv("DVR_VIDEO_BITRATE", "800k")
-X264_PRESET_LIVE = os.getenv("DVR_X264_PRESET_LIVE", "ultrafast")
+VIDEO_BITRATE = os.getenv("DVR_VIDEO_BITRATE", "1200k")
+# `veryfast` tem qualidade/compressão bem melhor que `ultrafast` e, em 640x480,
+# o custo de CPU no Celeron N3350 é desprezível.
+X264_PRESET_LIVE = os.getenv("DVR_X264_PRESET_LIVE", "veryfast")
 X264_PRESET_REC = os.getenv("DVR_X264_PRESET_REC", "veryfast")
+# zerolatency reduz a latência do ao vivo mas piora a compressão. Vazio = sem
+# tune (arquivos menores/melhor qualidade, ao vivo ~1 s mais lento).
+X264_TUNE = os.getenv("DVR_X264_TUNE", "zerolatency").strip()
+
+# --- Filtros de imagem / controles da câmera -------------------------------
+# Preset digital aplicado na captura: none|night|ir|bright|sharp|mirror|flip|rotate180
+IMAGE_PRESET = os.getenv("DVR_IMAGE_PRESET", "none").strip().lower()
+# Cadeia de filtros FFmpeg livre (ex.: "eq=saturation=1.3,unsharp=5:5:1.0"),
+# aplicada DEPOIS do preset.
+VIDEO_FILTERS = os.getenv("DVR_VIDEO_FILTERS", "").strip()
+# Controles v4l2 aplicados com `v4l2-ctl --set-ctrl` no boot
+# (ex.: "brightness=128,contrast=32,white_balance_automatic=1").
+V4L2_CTRLS = os.getenv("DVR_V4L2_CTRLS", "").strip()
 
 # --- Gravação / retenção ---------------------------------------------------
 SEGMENT_SECONDS = int(os.getenv("DVR_SEGMENT_SECONDS", "600"))        # 10 min

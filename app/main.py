@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import config
+from . import config, imaging
 from .recorder import Recorder, _segment_start
 from .streamer import HlsStreamer
 from .tunnel import TunnelManager
@@ -42,6 +42,9 @@ async def lifespan(app: FastAPI):
     if config.DVR_PASSWORD == "changeme":
         log.warning("DVR_PASSWORD não definido — usando o valor padrão 'changeme'!")
     log.info("Fonte de gravação: %s", config.RECORD_SOURCE)
+
+    # Controles da câmera (brilho/exposição/IR) e filtros de imagem.
+    await imaging.startup()
 
     await streamer.start()
     await recorder.start()
@@ -113,11 +116,16 @@ async def healthz() -> dict:
 # --------------------------------------------------------------- gravações
 @app.get("/api/recordings")
 async def list_recordings() -> list[dict]:
+    paths = sorted(config.RECORDINGS_DIR.glob("*.mp4"), key=_segment_start, reverse=True)
+    active = paths[0] if paths else None
     items: list[dict] = []
-    for path in sorted(config.RECORDINGS_DIR.glob("*.mp4"), key=_segment_start, reverse=True):
+    for path in paths:
         try:
             stat = path.stat()
         except OSError:
+            continue
+        # Arquivos com 0 byte (recém-criados) não são úteis para download.
+        if stat.st_size == 0:
             continue
         items.append({
             "filename": path.name,
@@ -125,6 +133,9 @@ async def list_recordings() -> list[dict]:
             "mtime": stat.st_mtime,
             "started_at": _segment_start(path).isoformat(),
             "url": f"/api/recordings/{path.name}",
+            # O segmento mais recente ainda está sendo gravado (MP4 fragmentado:
+            # já é reproduzível, mas o tamanho continua crescendo).
+            "active": path == active,
         })
     return items
 
@@ -138,6 +149,23 @@ async def download_recording(filename: str) -> FileResponse:
     if not target.is_file():
         raise HTTPException(status_code=404, detail="Gravação não encontrada")
     return FileResponse(target, media_type="video/mp4", filename=filename)
+
+
+# --------------------------------------------------- controles da câmera
+@app.get("/api/camera/controls")
+async def camera_controls() -> dict:
+    """Mostra preset/filtros ativos e os controles V4L2 que a câmera expõe.
+
+    Útil para descobrir os nomes exatos dos controles (brilho, exposição,
+    filtro de IR) antes de definir DVR_V4L2_CTRLS.
+    """
+    listing = await imaging.list_controls()
+    return {
+        "preset": config.IMAGE_PRESET,
+        "filters": imaging.build_filter_chain(),
+        "v4l2_ctrls": config.V4L2_CTRLS,
+        "v4l2_available": listing.strip() if listing else None,
+    }
 
 
 # --------------------------------------------------------------- HLS público

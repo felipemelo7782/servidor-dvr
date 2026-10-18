@@ -69,7 +69,7 @@
           .map(
             (it) =>
               `<li><a class="rec-link" href="${it.url}" download>${it.filename}</a>` +
-              `<span class="rec-meta">${fmtBytes(it.size)}</span></li>`
+              `<span class="rec-meta">${it.active ? "● gravando · " : ""}${fmtBytes(it.size)}</span></li>`
           )
           .join("");
       } catch (e) {

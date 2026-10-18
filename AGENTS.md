@@ -28,6 +28,8 @@ apenas como checagem de sintaxe.
 - `app/recorder.py` — FFmpeg gera MP4 em `/app/recordings` + task de retenção.
 - `app/tunnel.py` — subprocesso `cloudflared`, URL raspada do stderr, TTL 4 h.
 - `app/config.py` — **único** lugar que lê variáveis de ambiente.
+- `app/imaging.py` — presets de filtro (`DVR_IMAGE_PRESET`), filtros FFmpeg livres
+  (`DVR_VIDEO_FILTERS`) e controles da câmera via `v4l2-ctl` (`DVR_V4L2_CTRLS`).
 - `app/procutils.py` — encerramento compartilhado de subprocessos.
 - `static/` — HTML/CSS/JS puros, sem build; `hls.js` vem de CDN.
 
@@ -49,6 +51,17 @@ apenas como checagem de sintaxe.
 - **Parada graciosa difere:** o gravador recebe `q` no stdin (escreve o `moov` do
   MP4) — por isso ele usa `stdin=PIPE` e NÃO pode ganhar `-nostdin`. O streamer é
   morto com SIGTERM (HLS não precisa finalizar).
+- **Filtros entram no HLS, não na gravação.** `imaging.build_filter_chain()` é
+  aplicado em `streamer.py`; como o gravador em modo `hls` faz `-c copy`, ele herda
+  os filtros. NÃO adicione `-vf` junto de `-c copy`. No modo `device` os filtros são
+  aplicados no próprio `recorder.py`.
+- **Gravações são MP4 FRAGMENTADO** (`-segment_format_options movflags=+frag_keyframe+empty_moov+default_base_moof`).
+  É o que faz o arquivo abrir mesmo durante a gravação. Nunca troque por
+  `+faststart` (incompatível com o muxer `segment`).
+- **`v4l2-ctl` vem de `v4l-utils`** (no Dockerfile). `DVR_V4L2_CTRLS` é aplicado no
+  boot em `imaging.startup()`. Para descobrir os controles da câmera (brilho,
+  exposição, IR), use `GET /api/camera/controls`.
+- `DVR_X264_TUNE` vazio melhora a compressão mas aumenta ~1 s a latência do ao vivo.
 - **`recordings/` é bind mount no host** (persistente, grande). **`/app/hls` é
   tmpfs** (efêmero) — nunca coloque dado persistente lá.
 - O container roda como **root** de propósito (permissões de device e de bind mount).

@@ -21,6 +21,15 @@ services:
       DVR_USER: ${DVR_USER:-admin}
       DVR_PASSWORD: ${DVR_PASSWORD:-changeme}
       TZ: ${TZ:-America/Sao_Paulo}
+      # --- Qualidade de imagem/gravação (veja o README) ---
+      # DVR_VIDEO_SIZE: 1280x720        # mais qualidade (pesado p/ o Celeron)
+      # DVR_VIDEO_BITRATE: 2000k
+      # DVR_FRAMERATE: "20"
+      # DVR_X264_TUNE: ""               # vazio = melhor compressão, +1s de latência
+      # --- Filtros ---
+      # DVR_IMAGE_PRESET: ir            # none|night|ir|bright|sharp|mirror|flip|rotate180
+      # DVR_VIDEO_FILTERS: "eq=saturation=1.2,unsharp=5:5:1.0"
+      # DVR_V4L2_CTRLS: "brightness=128,contrast=32"
       # Ajuste só se necessário:
       # DVR_INPUT_FORMAT: mjpeg          # force o formato de captura da webcam
       # DVR_RECORD_SOURCE: hls           # hls (padrão) | device

@@ -9,12 +9,14 @@ ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1
 
-# ffmpeg  -> captura v4l2 + HLS/segmentação
-# tzdata  -> respeitar TZ (America/Sao_Paulo) nos nomes de arquivo
-# curl    -> download do cloudflared
+# ffmpeg    -> captura v4l2 + HLS/segmentação
+# v4l-utils -> v4l2-ctl (brilho, exposição, filtros de IR da câmera)
+# tzdata    -> respeitar TZ (America/Sao_Paulo) nos nomes de arquivo
+# curl      -> download do cloudflared
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
+        v4l-utils \
         tzdata \
         ca-certificates \
         curl \
