@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import shutil
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -25,9 +26,11 @@ log = logging.getLogger("dvr.recorder")
 # padrão em command(), atualize o regex abaixo.
 _NAME_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.mp4$")
 
-RESTART_DELAY = 3.0   # reinício do FFmpeg se ele morrer
-BOOT_GRACE = 5.0      # espera o HLS existir antes da 1ª checagem de retenção
-DELETE_GRACE = 60.0   # nunca apagar arquivos tocados nos últimos N s
+RESTART_DELAY = 3.0        # reinício do FFmpeg se ele morrer
+MAX_RESTART_DELAY = 30.0   # teto do backoff (evita loop apertado na CPU fraca)
+QUICK_EXIT = 10.0          # morreu em menos de X s => dobra o backoff
+BOOT_GRACE = 5.0           # espera o HLS existir antes da 1ª checagem de retenção
+DELETE_GRACE = 60.0        # nunca apagar arquivos tocados nos últimos N s
 
 
 def _segment_start(path) -> datetime:
@@ -48,6 +51,8 @@ class Recorder:
         self._stderr_task: Optional[asyncio.Task] = None
         self._retention_task: Optional[asyncio.Task] = None
         self._running = False
+        self._started_at: float = 0.0
+        self.last_stderr: Optional[str] = None  # diagnóstico
 
     # ------------------------------------------------------------------ FFmpeg
     def command(self) -> list[str]:
@@ -125,6 +130,9 @@ class Recorder:
             return
         cmd = self.command()
         log.info("Iniciando FFmpeg gravação: %s", " ".join(cmd))
+        if self._stderr_task:
+            self._stderr_task.cancel()
+            self._stderr_task = None
         try:
             self._proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -136,6 +144,8 @@ class Recorder:
             log.error("ffmpeg não encontrado no PATH; gravação indisponível")
             self._proc = None
             return
+        self.last_stderr = None
+        self._started_at = time.monotonic()
         self._stderr_task = asyncio.create_task(self._drain(self._proc), name="rec-stderr")
 
     async def _drain(self, proc: asyncio.subprocess.Process) -> None:
@@ -143,17 +153,25 @@ class Recorder:
         async for raw in proc.stderr:
             line = raw.decode(errors="replace").rstrip()
             if line:
-                log.debug("[rec/ffmpeg] %s", line)
+                self.last_stderr = line
+                log.info("[rec/ffmpeg] %s", line)
 
     async def _guard(self) -> None:
+        delay = RESTART_DELAY
         while self._running:
-            await asyncio.sleep(RESTART_DELAY)
+            await asyncio.sleep(delay)
             if not self._running:
                 break
-            if self._proc is None or self._proc.returncode is not None:
-                code = None if self._proc is None else self._proc.returncode
-                log.warning("FFmpeg gravação encerrou (código=%s); reiniciando", code)
+            proc = self._proc
+            if proc is None or proc.returncode is not None:
+                lived = time.monotonic() - self._started_at if self._started_at else 0.0
+                delay = min(delay * 2, MAX_RESTART_DELAY) if lived < QUICK_EXIT else RESTART_DELAY
+                code = None if proc is None else proc.returncode
+                log.warning("FFmpeg gravação encerrou (código=%s, viveu %.1fs); "
+                            "reiniciando em %.0fs", code, lived, delay)
                 await self._spawn()
+            else:
+                delay = RESTART_DELAY
 
     async def stop(self) -> None:
         self._running = False

@@ -105,6 +105,19 @@ DVR_V4L2_CTRLS=brightness=128,contrast=32,white_balance_automatic=1
 > software. Se a sua câmera expuser um controle de IR no `--list-ctrls`, ele
 > aparecerá nesse endpoint e poderá ser ajustado via `DVR_V4L2_CTRLS`.
 
+Na **página principal** há um seletor de filtro que aplica a troca na hora (sem
+redeploy): ele chama `POST /api/camera/preset` e reinicia o stream por alguns
+segundos. A escolha vale até o container reiniciar (aí volta ao `DVR_IMAGE_PRESET`).
+
+### Diagnóstico rápido
+
+- `GET /healthz` → inclui `hls_last_error`/`rec_last_error` (última mensagem de cada
+  FFmpeg) e o preset/filtro ativos. É o primeiro lugar a olhar se aparecer
+  "Sem sinal da câmera".
+- `GET /api/camera/controls` → controles V4L2 expostos pela câmera.
+- Se um filtro quebrar o stream, o backend **desativa os filtros automaticamente**
+  e registra o motivo no log; ao reiniciar, volta a funcionar.
+
 ## Melhorar a qualidade da gravação
 
 Como a gravação é um remux do HLS, **a qualidade gravada = qualidade do HLS**.

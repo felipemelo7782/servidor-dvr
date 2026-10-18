@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from typing import Optional
 
 from . import config, imaging
@@ -20,7 +21,9 @@ from .procutils import terminate_process
 
 log = logging.getLogger("dvr.streamer")
 
-RESTART_DELAY = 3.0  # segundos entre tentativas (evita loop apertado))
+RESTART_DELAY = 3.0        # espera entre tentativas de reinício
+MAX_RESTART_DELAY = 30.0   # teto do backoff (evita loop apertado que trava a CPU)
+QUICK_EXIT = 10.0          # se morrer em menos de X s, dobra o backoff
 
 
 class HlsStreamer:
@@ -29,6 +32,8 @@ class HlsStreamer:
         self._watchdog: Optional[asyncio.Task] = None
         self._stderr_task: Optional[asyncio.Task] = None
         self._running = False
+        self._started_at: float = 0.0
+        self.last_stderr: Optional[str] = None  # última linha do FFmpeg (diagnóstico)
 
     def command(self) -> list[str]:
         """Monta o comando FFmpeg do HLS ao vivo.
@@ -86,6 +91,10 @@ class HlsStreamer:
             log.error("Dispositivo %s ausente; stream HLS não iniciado", config.VIDEO_DEVICE)
             self._proc = None
             return
+        # Cancela o leitor de stderr anterior (se houver) antes de abrir outro.
+        if self._stderr_task:
+            self._stderr_task.cancel()
+            self._stderr_task = None
         cmd = self.command()
         log.info("Iniciando FFmpeg HLS: %s", " ".join(cmd))
         try:
@@ -99,26 +108,52 @@ class HlsStreamer:
             log.error("ffmpeg não encontrado no PATH; stream HLS indisponível")
             self._proc = None
             return
+        self.last_stderr = None
+        self._started_at = time.monotonic()
         self._stderr_task = asyncio.create_task(self._drain(self._proc), name="hls-stderr")
 
     async def _drain(self, proc: asyncio.subprocess.Process) -> None:
-        """Consome o stderr para não entupir o pipe (logs em nível debug)."""
+        """Consome o stderr do FFmpeg.
+
+        Logado em INFO (não DEBUG): com ``-loglevel warning`` o volume é baixo e,
+        quando algo quebra, é exatamente aqui que aparece o motivo.
+        """
         assert proc.stderr is not None
         async for raw in proc.stderr:
             line = raw.decode(errors="replace").rstrip()
             if line:
-                log.debug("[hls/ffmpeg] %s", line)
+                self.last_stderr = line
+                log.info("[hls/ffmpeg] %s", line)
 
     async def _guard(self) -> None:
-        """Reinicia o FFmpeg sempre que ele morrer, com backoff fixo."""
+        """Reinicia o FFmpeg quando ele morre, com backoff exponencial.
+
+        O backoff evita que uma falha persistente (ex.: filtro inválido, câmera
+        ocupada) gere um loop de reinício a cada 3 s que consome a CPU inteira de
+        um Celeron.
+        """
+        delay = RESTART_DELAY
         while self._running:
-            await asyncio.sleep(RESTART_DELAY)
+            await asyncio.sleep(delay)
             if not self._running:
                 break
-            if self._proc is None or self._proc.returncode is not None:
-                code = None if self._proc is None else self._proc.returncode
-                log.warning("FFmpeg HLS encerrou (código=%s); reiniciando", code)
+            proc = self._proc
+            if proc is None or proc.returncode is not None:
+                lived = time.monotonic() - self._started_at if self._started_at else 0.0
+                delay = min(delay * 2, MAX_RESTART_DELAY) if lived < QUICK_EXIT else RESTART_DELAY
+                code = None if proc is None else proc.returncode
+                log.warning("FFmpeg HLS encerrou (código=%s, viveu %.1fs); "
+                            "reiniciando em %.0fs", code, lived, delay)
                 await self._spawn()
+            else:
+                delay = RESTART_DELAY
+
+    async def restart(self) -> None:
+        """Reinicia o FFmpeg (usado ao trocar filtros em tempo de execução)."""
+        was_running = self._running
+        await self.stop()
+        if was_running:
+            await self.start()
 
     async def stop(self) -> None:
         self._running = False

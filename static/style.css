@@ -285,6 +285,18 @@ main {
 .hint { color: var(--muted); font-size: 0.85rem; line-height: 1.45; }
 .hint.warn { color: var(--warn); }
 
+.select {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 8px 11px;
+  font-size: 0.9rem;
+  min-width: 190px;
+  cursor: pointer;
+}
+.select:disabled { opacity: 0.6; cursor: wait; }
+
 /* ------------------------------------------------------------ mobile */
 @media (max-width: 560px) {
   .brand .cam { display: none; }

@@ -53,6 +53,55 @@
     video.play().catch(() => {});
   }
 
+  // ------------------------------------- página principal: filtro de imagem
+  const presetSel = document.getElementById("filter-preset");
+  if (presetSel) {
+    const LABELS = {
+      none: "Nenhum",
+      night: "Noturno",
+      ir: "Infravermelho (P&B)",
+      bright: "Clarear",
+      sharp: "Nitidez",
+      mirror: "Espelhar",
+      flip: "Inverter vertical",
+      rotate180: "Girar 180°",
+    };
+    const loadPresets = async () => {
+      try {
+        const res = await fetch("/api/camera/presets", { cache: "no-store" });
+        const data = await res.json();
+        presetSel.innerHTML = data.presets
+          .map((p) => `<option value="${p}">${LABELS[p] || p}</option>`)
+          .join("");
+        presetSel.value = data.current || "none";
+        presetSel.disabled = false;
+      } catch (e) {
+        presetSel.innerHTML = '<option value="">indisponível</option>';
+      }
+    };
+    loadPresets();
+
+    presetSel.addEventListener("change", async () => {
+      const chosen = presetSel.value;
+      presetSel.disabled = true;
+      try {
+        const res = await fetch("/api/camera/preset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ preset: chosen }),
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        // O stream reinicia: recarrega a página para reconectar o player.
+        setTimeout(() => window.location.reload(), 3000);
+      } catch (e) {
+        alert("Não foi possível aplicar o filtro.");
+        presetSel.value = "";
+        presetSel.disabled = false;
+        loadPresets();
+      }
+    });
+  }
+
   // ------------------------------------- página principal: gravações
   const recList = document.getElementById("recordings");
   if (recList) {

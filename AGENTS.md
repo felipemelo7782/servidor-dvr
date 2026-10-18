@@ -62,6 +62,15 @@ apenas como checagem de sintaxe.
   boot em `imaging.startup()`. Para descobrir os controles da câmera (brilho,
   exposição, IR), use `GET /api/camera/controls`.
 - `DVR_X264_TUNE` vazio melhora a compressão mas aumenta ~1 s a latência do ao vivo.
+- **O preset pode mudar em runtime** via `POST /api/camera/preset`, que chama
+  `streamer.restart()`. Esse estado vive em memória (`app/imaging.py`) e volta ao
+  `DVR_IMAGE_PRESET` quando o container reinicia. A cadeia é validada com um vídeo
+  sintético antes de aplicar; um filtro inválido retorna 400 e NÃO derruba o stream.
+- **Erros do FFmpeg são logados em INFO** (não em DEBUG) e a última linha fica em
+  `streamer.last_stderr` / `recorder.last_stderr`, exposta em `GET /healthz`. É o
+  primeiro lugar a olhar quando dá "sem sinal".
+- Os watchdogs têm **backoff exponencial** (3→30 s) para não travar a CPU fraca num
+  loop de reinício.
 - **`recordings/` é bind mount no host** (persistente, grande). **`/app/hls` é
   tmpfs** (efêmero) — nunca coloque dado persistente lá.
 - O container roda como **root** de propósito (permissões de device e de bind mount).

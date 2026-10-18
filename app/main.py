@@ -14,6 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from . import config, imaging
 from .recorder import Recorder, _segment_start
@@ -110,6 +111,12 @@ async def healthz() -> dict:
         "stream": streamer._proc is not None and streamer._proc.returncode is None,
         "recording": recorder._proc is not None and recorder._proc.returncode is None,
         "tunnel": tunnel.status()["state"],
+        # Diagnóstico: a última linha emitida por cada FFmpeg (fica aqui porque
+        # os logs do EasyPanel às vezes ficam difíceis de seguir).
+        "hls_last_error": streamer.last_stderr,
+        "rec_last_error": recorder.last_stderr,
+        "preset": imaging.current_preset(),
+        "filters": imaging.build_filter_chain(),
     }
 
 
@@ -161,10 +168,52 @@ async def camera_controls() -> dict:
     """
     listing = await imaging.list_controls()
     return {
-        "preset": config.IMAGE_PRESET,
+        "preset": imaging.current_preset(),
+        "presets": imaging.available_presets(),
         "filters": imaging.build_filter_chain(),
         "v4l2_ctrls": config.V4L2_CTRLS,
         "v4l2_available": listing.strip() if listing else None,
+    }
+
+
+class PresetBody(BaseModel):
+    preset: str
+    filters: str | None = None
+
+
+@app.get("/api/camera/presets")
+async def camera_presets() -> dict:
+    """Presets disponíveis e o ativo (usado pelo seletor da página principal)."""
+    return {
+        "presets": imaging.available_presets(),
+        "current": imaging.current_preset(),
+        "filters": imaging.build_filter_chain(),
+    }
+
+
+@app.post("/api/camera/preset")
+async def set_camera_preset(body: PresetBody) -> dict:
+    """Troca o filtro de imagem em tempo de execução e reinicia o stream.
+
+    O preset é validado com um vídeo sintético antes de ser aplicado; se a cadeia
+    for inválida, retorna 400 e nada muda.
+    """
+    preset = (body.preset or "").strip().lower()
+    if preset not in imaging.PRESETS:
+        raise HTTPException(status_code=400,
+                            detail=f"preset inválido; use: {', '.join(imaging.available_presets())}")
+    chain = imaging.compose_chain(preset, body.filters or "")
+    if chain and not await imaging.validate_chain(chain):
+        raise HTTPException(status_code=400, detail="cadeia de filtros inválida")
+
+    imaging.set_preset(preset, body.filters or "")
+    await streamer.restart()
+    log.info("Filtro de imagem alterado para preset=%s", preset)
+    return {
+        "ok": True,
+        "preset": imaging.current_preset(),
+        "filters": imaging.build_filter_chain(),
+        "note": "stream reiniciado; recarregue o player",
     }
 
 
