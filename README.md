@@ -17,8 +17,7 @@ Porta principal: **2310**.
 
 ```
 .
-├── docker-compose.yml         # orquestração (EasyPanel ou `docker compose up`)
-├── docker-compose.ipcam.yml   # variante para câmera IP em host SEM webcam
+├── docker-compose.yml         # orquestração única (EasyPanel ou `docker compose up`)
 ├── Dockerfile                 # Python 3.12 + FFmpeg + cloudflared
 ├── requirements.txt
 ├── app/
@@ -51,12 +50,14 @@ Acesse `http://IP-DO-SERVIDOR:2310`. O navegador pedirá usuário e senha
 2. Defina as variáveis de ambiente `DVR_USER`, `DVR_PASSWORD` e `TZ`.
 3. Publique. O EasyPanel cuida do build e do proxy; a porta interna é `2310`.
 
-> **Pré-requisito de hardware (modo USB):** `/dev/video0` deve existir no host.
-> No host, confirme com `ffmpeg -f v4l2 -i /dev/video0 -frames:v 1 teste.jpg`.
-> Para câmera IP (icsee/yoosee) em host **sem** webcam, use
-> `docker compose -f docker-compose.ipcam.yml up -d --build` (ou no EasyPanel,
-> cole o conteúdo dessa variante) — o `docker-compose.yml` padrão mapeia
-> `/dev/video0` e falha se o device não existir.
+> **Câmera IP (icsee/yoosee):** nenhum device é necessário — o compose principal
+> já sobe em qualquer host. Configure as variáveis `DVR_MODO_OP`/`DVR_IPCAM_*`
+> no `.env` (ou no Environment do EasyPanel).
+>
+> **Webcam USB (`DVR_MODO_OP=usb`):** é preciso existir `/dev/video0` no host e
+> **descomentar** o bloco `devices`/`group_add` no fim do `docker-compose.yml` —
+> o Docker falha ao criar o container se o device for mapeado sem existir
+> (confirme no host com `ffmpeg -f v4l2 -i /dev/video0 -frames:v 1 teste.jpg`).
 
 ## Modos de operação (`DVR_MODO_OP`)
 

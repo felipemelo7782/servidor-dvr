@@ -50,9 +50,11 @@ apenas como checagem de sintaxe.
   câmera (`-c copy`); se houver preset de filtro, re-encode automaticamente e a
   gravação herda os filtros via HLS (mesma mecânica do modo USB). A URL em logs
   e APIs (`/healthz`, `/api/camera/info`) é SEMPRE mascarada — não desmascare.
-- **Compose e /dev/video0:** o bloco `devices:` falha a criação do container em
-  hosts sem webcam. Para câmera IP sem webcam use `docker-compose.ipcam.yml`
-  (variante sem device) ou remova `devices:`/`group_add:` do compose.
+- **Compose e /dev/video0:** o bloco `devices:` vem **comentado** no compose
+  (padrão = câmera IP). Descomente `devices`/`group_add` SÓ quando
+  `DVR_MODO_OP=usb` em host com webcam — o Docker falha ao criar o container
+  com um device mapeado que não existe. Nunca poste o compose com device em
+  host sem webcam (é esse erro: "error gathering device information").
 - **A porta 2310 aparece em 4 lugares** e precisa ficar em sincronia: `docker-compose.yml`,
   `uvicorn --port` no `Dockerfile`, `config.PORT` e o alvo do túnel.
 - **`/hls/*` é público de propósito** (o player não envia Basic Auth). Todo o resto
@@ -87,8 +89,8 @@ apenas como checagem de sintaxe.
 - **`recordings/` é bind mount no host** (persistente, grande). **`/app/hls` é
   tmpfs** (efêmero) — nunca coloque dado persistente lá.
 - O container roda como **root** de propósito (permissões de device e de bind mount).
-  `devices: [/dev/video0]` + `group_add: [video]` continuam no compose. **Não** adicione
-  `privileged: true`.
+  Com webcam USB, o mapeamento é via `devices:` + `group_add: [video]` (bloco
+  comentado no compose). **Não** adicione `privileged: true`.
 - `DVR_PASSWORD` tem padrão `changeme` e o boot emite um aviso. Nunca faça commit de
   senha real: use `.env` (veja `.env.example`, já no `.gitignore`/`.dockerignore`).
 - Imagem preta/ruim da webcam? Defina `DVR_INPUT_FORMAT=mjpeg` (a maioria das UVC).

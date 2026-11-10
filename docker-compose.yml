@@ -2,10 +2,9 @@
 # docker-compose.yml — pronto para EasyPanel e para `docker compose up -d`.
 # NÃO usar a chave `version:` (obsoleta).
 #
-# Pré-requisitos no host Ubuntu 24.04:
-#   - /dev/video0 existe (webcam USB) e o usuário pertence ao grupo `video`.
-#   - Portas: apenas 2310 é publicada.
-#   - Credenciais em um arquivo .env ao lado deste arquivo (ver .env.example).
+# Modo padrão: câmera IP ICSEE/YOOSEE (não precisa de device no host).
+# Para webcam USB em DVR_MODO_OP=usb, descomente o bloco `devices`/`group_add`
+# ao final deste arquivo — o container falha ao subir se o device não existir.
 # ---------------------------------------------------------------------------
 services:
   dvr:
@@ -24,12 +23,11 @@ services:
 
       # ---------------------------------------------------------------
       # MODO DE OPERAÇÃO — escolhe a fonte do vídeo:
-      #   usb    = webcam /dev/video0 (original)
+      #   usb    = webcam /dev/video0 (OBRIGATÓRIO descomentar o bloco
+      #            devices/group_add no fim do arquivo, senão o container
+      #            nem sobe — e o stream fica "sem sinal")
       #   icsee  = câmera IP iCSee/Xmeye via RTSP (porta NET 34567 ou 554)
       #   yoosee = câmera IP Yoosee via RTSP (554, fluxos onvif1/onvif2)
-      # No modo usb a maquina PRECISA ter /dev/video0 (bloco `devices` abaixo).
-      # No modo icsee/yoosee SEM webcam instalada, use o docker-compose.ipcam.yml
-      # (variante sem o device) ou remova os blocos `devices`/`group_add`.
       # ---------------------------------------------------------------
       DVR_MODO_OP: ${DVR_MODO_OP:-usb}
 
@@ -77,11 +75,18 @@ services:
     tmpfs:
       - /app/hls:size=64m,mode=1777
 
-    # Acesso à câmera. `group_add` cobre ambientes onde o processo não é root;
-    # NÃO usamos privileged: true.
-    devices:
-      - /dev/video0:/dev/video0
-    group_add:
-      - video
+    # ---------------------------------------------------------------
+    # APENAS MODO USB (DVR_MODO_OP=usb): mapeie a webcam DESCOMENTANDO as
+    # duas chaves abaixo. Padrão é câmera IP (icsee/yoosee via RTSP), que
+    # não precisa de device — e hosts sem webcam FALHAM em subir o contai-
+    # ner se /dev/video0 for mapeado sem existir.
+    #
+    # devices:
+    #   - /dev/video0:/dev/video0
+    # group_add:
+    #   - video
+    # ---------------------------------------------------------------
+
+    # Sem `privileged: true` de propósito (o root já cobre o bind mount).
 
     restart: unless-stopped
