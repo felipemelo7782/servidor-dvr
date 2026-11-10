@@ -10,5 +10,7 @@ venv/
 
 # Segredos e IDE
 .env
+# Teste de variaveis (dados do ambiente local, nunca no repo)
+ENV-PARA-TESTAR.txt
 .idea/
 .vscode/
