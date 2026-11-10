@@ -198,6 +198,14 @@ main {
 
 .rec-meta { color: var(--muted); font-size: 0.8rem; }
 
+/* Nome à esquerda, tamanho + botão de download à direita de cada linha. */
+.rec-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
 /* -------------------------------------------------------------- botões */
 .btn {
   appearance: none;

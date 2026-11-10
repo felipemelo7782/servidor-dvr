@@ -7,8 +7,10 @@ importa este módulo em vez de chamar ``os.getenv`` diretamente.
 from __future__ import annotations
 
 import os
+import re
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -30,6 +32,60 @@ APP_DIR = BASE_DIR / "app"
 STATIC_DIR = BASE_DIR / "static"
 HLS_DIR = Path(os.getenv("HLS_DIR", "/app/hls"))
 RECORDINGS_DIR = Path(os.getenv("RECORDINGS_DIR", "/app/recordings"))
+
+# --- Modo de operação -------------------------------------------------------
+# Escolhe a FONTE do vídeo (uma câmera por vez):
+#   usb    -> webcam USB em VIDEO_DEVICE (v4l2) — comportamento original.
+#   icsee  -> câmera IP via RTSP, protocolo iCSee/Xmeye (porta NET 34567 ou 554).
+#   yoosee -> câmera IP via RTSP, fluxos onvif1/onvif2 do Yoosee (porta 554).
+# Os modos IP seguem o MESMO pipeline do USB: só muda a entrada do FFmpeg no
+# streamer; o gravador continua remuxando o HLS local, idêntico na prática.
+_MODO_ALIASES = {"xmeye": "icsee", "icsee": "icsee", "yoosee": "yoosee", "usb": "usb"}
+_MODO_RAW = os.getenv("DVR_MODO_OP", os.getenv("MODO_OP", "usb")).strip().lower()
+MODO_OP = _MODO_ALIASES.get(_MODO_RAW, "usb")
+
+# Porta RTSP padrão por modo. No iCSee/Xmeye o RTSP costuma servir tanto na
+# 554 clássica quanto na porta "NET" 34567 (preferida, segue o pedido do host);
+# Yoosee só expõe na 554. Sempre sobrescrevível com DVR_IPCAM_PORT.
+_DEFAULT_IPCAM_PORT = {"icsee": 34567, "yoosee": 554}
+
+# --- Câmera IP (usada só quando MODO_OP != "usb") ---------------------------
+# DVR_IPCAM_HOST aceita "192.168.1.10", "192.168.1.10:34567" ou "rtsp://ip:554".
+
+
+def _parse_host(raw: str) -> tuple[str, int | None]:
+    """Normaliza DVR_IPCAM_HOST: separa host puro de uma porta embutida."""
+    text = raw.strip()
+    if "://" in text:  # usuário colou a URL completa no HOST
+        text = text.split("://", 1)[1]
+    host, sep, port = text.partition(":")
+    host = host.rstrip("/")
+    if sep:
+        try:
+            return host, int(port)
+        except ValueError:
+            pass
+    return (host or "").strip(), None
+
+
+_host_raw = os.getenv("DVR_IPCAM_HOST", "")
+IPCAM_HOST, _EMBEDDED_PORT = _parse_host(_host_raw)
+IPCAM_PORT = int(os.getenv("DVR_IPCAM_PORT", "") or _EMBEDDED_PORT
+                 or _DEFAULT_IPCAM_PORT.get(MODO_OP) or 554)
+IPCAM_USER = os.getenv("DVR_IPCAM_USER", "admin").strip() or "admin"
+IPCAM_PASS = os.getenv("DVR_IPCAM_PASS", "").strip()
+IPCAM_CHANNEL = int(os.getenv("DVR_IPCAM_CHANNEL", "") or "1")   # canal NVR/1ª câmera
+IPCAM_STREAM = int(os.getenv("DVR_IPCAM_STREAM", "") or "0")     # 0=principal 1=sub
+# tcp = confiável em Wi-Fi/PLC (recomendado); udp pode ter menos latência.
+IPCAM_TRANSPORT = os.getenv("DVR_IPCAM_TRANSPORT", "tcp").strip().lower()
+# auto  = copia o H.264 da câmera (-c copy); re-encode SÓ se houver preset de
+#         filtro configurado (assim a gravação segue herdando os filtros).
+# 1     = força re-encode sempre (mais pesado no Celeron).
+# 0     = nunca re-encode (filtros DIGITAIS ficam desativados neste modo).
+IPCAM_TRANSCODE = os.getenv("DVR_IPCAM_TRANSCODE", "auto").strip().lower()
+# URL RTSP completa que sobrescreve tudo acima (lista branca para firmwares
+# exóticos). Ex.: rtsp://admin:senha@ip:34567/user=admin&password=senha&channel=1&stream=0.sdp?real_stream
+IPCAM_URL_OVERRIDE = os.getenv("DVR_IPCAM_URL", "").strip()
 
 # --- Câmera / FFmpeg -------------------------------------------------------
 VIDEO_DEVICE = os.getenv("VIDEO_DEVICE", "/dev/video0")
@@ -88,3 +144,63 @@ if hasattr(time, "tzset"):  # não existe no Windows, irrelevante em produção
         time.tzset()
     except Exception:  # pragma: no cover - defensivo
         pass
+
+
+# ----------------------------------------------------- URL RTSP da câmera IP
+def ipcam_url() -> str | None:
+    """Monta a URL RTSP da câmera IP conforme o modo; None se não configurada.
+
+    Com DVR_IPCAM_URL definido, ela é usada verbatim (última palavra para
+    firmwares exóticos). Senão:
+      icsee/xmeye -> rtsp://user:pass@host:porta/user=U&password=P&channel=1&stream=0.sdp?real_stream
+                     (o mesmo formato serve na 554 clássica e na porta NET 34567)
+      yoosee      -> rtsp://user:pass@host:554/onvif1  (onvif2 = fluxo secundário)
+    """
+    if IPCAM_URL_OVERRIDE:
+        return IPCAM_URL_OVERRIDE
+    if MODO_OP == "usb" or not IPCAM_HOST:
+        return None
+    user = quote(IPCAM_USER, safe="")
+    pwd = quote(IPCAM_PASS, safe="")
+    if MODO_OP == "yoosee":
+        return f"rtsp://{user}:{pwd}@{IPCAM_HOST}:{IPCAM_PORT}/onvif{IPCAM_STREAM + 1}"
+    # icsee (também aceito por iCSee "puros" e clones Xmeye):
+    # as credenciais entram no userinfo E na query — firmwares às vezes exigem
+    # só um dos dois.
+    return (f"rtsp://{user}:{pwd}@{IPCAM_HOST}:{IPCAM_PORT}/"
+            f"user={user}&password={pwd}&channel={IPCAM_CHANNEL}"
+            f"&stream={IPCAM_STREAM}.sdp?real_stream")
+
+
+def mask_secrets(text: str | None) -> str | None:
+    """Mascara credenciais RTSP em QUALQUER texto (comando, URL, log)."""
+    if not text:
+        return text
+    # 1) Senha conhecida (DVR_IPCAM_PASS): mascara TODAS as ocorrências
+    #    (userinfo do yoosee = 1x; icsee tem 1x no userinfo e 1x na query).
+    if IPCAM_PASS:
+        encoded = quote(IPCAM_PASS, safe="")
+        if encoded:
+            text = text.replace(encoded, "***")
+    # 2) Credenciais no userinfo não cobertas (URL custom com outra senha).
+    #    Funciona em URL pura OU dentro de uma linha de comando inteira.
+    head, sep, rest = text.partition("://")
+    creds, at, tail = rest.partition("@")
+    user, colon, pwd = creds.partition(":")
+    if at and colon and pwd and "@" not in user:
+        # Sanity: não mascarar um "user@" sem senha ou conteúdo aleatório.
+        text = f"{head}://{user}:***@{tail}"
+    # 3) Qualquer "password=..." que sobrar na query (icsee), conhecido ou não.
+    return re.sub(r"(password=)([^&\s]+)", r"\1***", text, flags=re.IGNORECASE)
+
+
+def ipcam_url_masked() -> str | None:
+    """URL RTSP com a senha mascarada (para log e API de diagnóstico)."""
+    return mask_secrets(ipcam_url()) if ipcam_url() else None
+
+
+def camera_label() -> str:
+    """Rótulo curto da câmera ativa (topbar/healthz), sem segredos."""
+    if MODO_OP == "usb":
+        return VIDEO_DEVICE
+    return f"{MODO_OP} · {IPCAM_HOST or '?'}:{IPCAM_PORT}"

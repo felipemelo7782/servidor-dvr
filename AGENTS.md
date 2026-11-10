@@ -1,8 +1,9 @@
 # AGENTS.md
 
-DVR caseiro: **um** container Docker que transmite uma webcam USB como HLS,
-grava segmentos MP4 de 10 min com retenção de 24 h e expõe um Cloudflare Quick
-Tunnel sob demanda. Alvo: Ubuntu 24.04, Celeron N3350 / 4 GB RAM. Porta **2310**.
+DVR caseiro: **um** container Docker que transmite uma webcam USB (ou câmera IP
+icsee/yoosee via RTSP, escolhida por `DVR_MODO_OP`) como HLS, grava segmentos
+MP4 de 10 min com retenção de 24 h e expõe um Cloudflare Quick Tunnel sob
+demanda. Alvo: Ubuntu 24.04, Celeron N3350 / 4 GB RAM. Porta **2310**.
 A raiz do repositório **é** a raiz do projeto (sem subpasta `dvr-yoosee/`).
 
 ## Comandos
@@ -23,8 +24,10 @@ apenas como checagem de sintaxe.
 - `app/main.py` — app FastAPI, middleware de Basic Auth, todas as rotas, e o
   `lifespan` que sobe/derruba os três gerentes. **Só um worker uvicorn** (o estado
   vive no processo — não aumente `--workers`).
-- `app/streamer.py` — processo FFmpeg persistente `/dev/video0` -> `/app/hls`.
-  Watchdog reinicia se cair.
+- `app/streamer.py` — processo FFmpeg persistente `/dev/video0` (modo `usb`) ou
+  RTSP da câmera IP (modos `icsee`/`yoosee`) -> `/app/hls`.
+  Watchdog reinicia se cair. Nos modos IP o H.264 da câmera é copiado (`-c copy`);
+  re-encode só se houver preset de filtro (então a gravação também herda).
 - `app/recorder.py` — FFmpeg gera MP4 em `/app/recordings` + task de retenção.
 - `app/tunnel.py` — subprocesso `cloudflared`, URL raspada do stderr, TTL 4 h.
 - `app/config.py` — **único** lugar que lê variáveis de ambiente.
@@ -39,7 +42,17 @@ apenas como checagem de sintaxe.
   Por isso o gravador NÃO abre `/dev/video0` por padrão: ele re-muxa o HLS ao vivo
   (`-c copy`) de `http://localhost:2310/hls/stream.m3u8`. Isso também evita um
   segundo encode x264 no hardware fraco. Só use `DVR_RECORD_SOURCE=device` se a
-  câmera suportar múltiplas aberturas.
+  câmera suportar múltiplas aberturas. Nos modos IP (`DVR_MODO_OP=icsee/yoosee`)
+  `device` nem é aceito: o gravador força o remux do HLS (avisa no log).
+- **Modo IP:** o modo é `DVR_MODO_OP` (usb|icsee|yoosee, lido só em `config.py`,
+  que também monta a URL RTSP: icsee usa porta padrão 34567, yoosee 554 + `/onvif1`).
+  `DVR_IPCAM_URL` sobrescreve tudo. Nos modos IP o streamer copia o H.264 da
+  câmera (`-c copy`); se houver preset de filtro, re-encode automaticamente e a
+  gravação herda os filtros via HLS (mesma mecânica do modo USB). A URL em logs
+  e APIs (`/healthz`, `/api/camera/info`) é SEMPRE mascarada — não desmascare.
+- **Compose e /dev/video0:** o bloco `devices:` falha a criação do container em
+  hosts sem webcam. Para câmera IP sem webcam use `docker-compose.ipcam.yml`
+  (variante sem device) ou remova `devices:`/`group_add:` do compose.
 - **A porta 2310 aparece em 4 lugares** e precisa ficar em sincronia: `docker-compose.yml`,
   `uvicorn --port` no `Dockerfile`, `config.PORT` e o alvo do túnel.
 - **`/hls/*` é público de propósito** (o player não envia Basic Auth). Todo o resto

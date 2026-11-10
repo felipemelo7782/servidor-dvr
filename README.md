@@ -1,10 +1,12 @@
-# DVR — Câmera USB com HLS, gravação 24 h e Quick Tunnel
+# DVR — Câmera USB ou IP (icsee/yoosee) com HLS, gravação 24 h e Quick Tunnel
 
-Sistema de DVR caseiro para **uma webcam USB** (`/dev/video0`), em **um único
+Sistema de DVR caseiro para **uma webcam USB** (`/dev/video0`) **ou uma câmera IP
+icsee/Yoosee via RTSP** (escolha na variável `DVR_MODO_OP`), em **um único
 container** Docker:
 
 - **Stream ao vivo** via HLS (funciona em qualquer navegador; player `hls.js`).
-- **Gravação cíclica** em segmentos MP4 de 10 minutos com **retenção de 24 h**.
+- **Gravação cíclica** em segmentos MP4 de 10 minutos com **retenção de 24 h**,
+  com **botão de download** para cada gravação.
 - **Cloudflare Quick Tunnel** sob demanda, com expiração automática em 4 h.
 - **Autenticação HTTP Basic** em tudo, exceto o próprio stream HLS.
 
@@ -15,19 +17,20 @@ Porta principal: **2310**.
 
 ```
 .
-├── docker-compose.yml     # orquestração (EasyPanel ou `docker compose up`)
-├── Dockerfile             # Python 3.12 + FFmpeg + cloudflared
+├── docker-compose.yml         # orquestração (EasyPanel ou `docker compose up`)
+├── docker-compose.ipcam.yml   # variante para câmera IP em host SEM webcam
+├── Dockerfile                 # Python 3.12 + FFmpeg + cloudflared
 ├── requirements.txt
 ├── app/
-│   ├── main.py            # FastAPI: rotas, auth, ciclo de vida
-│   ├── config.py          # TODAS as variáveis de ambiente
-│   ├── streamer.py        # FFmpeg -> HLS ao vivo (+ watchdog)
-│   ├── recorder.py        # FFmpeg -> segmentos MP4 + retenção 24 h
-│   ├── tunnel.py          # subprocesso cloudflared (+ TTL de 4 h)
-│   └── procutils.py       # encerramento de subprocessos
-├── static/                # index.html, tunnel.html, style.css, app.js
-├── recordings/            # (volume) gravacoes .mp4
-└── hls/                   # (tmpfs) segmentos HLS ao vivo
+│   ├── main.py                # FastAPI: rotas, auth, ciclo de vida
+│   ├── config.py              # TODAS as variáveis de ambiente
+│   ├── streamer.py            # FFmpeg (USB ou RTSP) -> HLS ao vivo (+ watchdog)
+│   ├── recorder.py            # FFmpeg -> segmentos MP4 + retenção 24 h
+│   ├── tunnel.py              # subprocesso cloudflared (+ TTL de 4 h)
+│   └── procutils.py           # encerramento de subprocessos
+├── static/                    # index.html, tunnel.html, style.css, app.js
+├── recordings/                # (volume) gravacoes .mp4
+└── hls/                       # (tmpfs) segmentos HLS ao vivo
 ```
 
 ## Como subir
@@ -48,13 +51,74 @@ Acesse `http://IP-DO-SERVIDOR:2310`. O navegador pedirá usuário e senha
 2. Defina as variáveis de ambiente `DVR_USER`, `DVR_PASSWORD` e `TZ`.
 3. Publique. O EasyPanel cuida do build e do proxy; a porta interna é `2310`.
 
-> **Pré-requisito de hardware:** `/dev/video0` deve existir no host. No host,
-> confirme com `ffmpeg -f v4l2 -i /dev/video0 -frames:v 1 teste.jpg`.
+> **Pré-requisito de hardware (modo USB):** `/dev/video0` deve existir no host.
+> No host, confirme com `ffmpeg -f v4l2 -i /dev/video0 -frames:v 1 teste.jpg`.
+> Para câmera IP (icsee/yoosee) em host **sem** webcam, use
+> `docker compose -f docker-compose.ipcam.yml up -d --build` (ou no EasyPanel,
+> cole o conteúdo dessa variante) — o `docker-compose.yml` padrão mapeia
+> `/dev/video0` e falha se o device não existir.
+
+## Modos de operação (`DVR_MODO_OP`)
+
+| Modo | Fonte | Como funciona |
+|---|---|---|
+| `usb` | Webcam USB `/dev/video0` | Encoda com x264 e aplica filtros (comportamento original) |
+| `icsee` | Câmera IP iCSee/Xmeye via RTSP | **Copia** o H.264 da câmera (`-c copy`, custo de CPU ~zero); re-encode só com filtro configurado |
+| `yoosee` | Câmera IP Yoosee via RTSP | Igual ao `icsee`, com URL/fluxos do Yoosee |
+
+Nos três modos a **gravação é idêntica na prática**: o gravador sempre remuxa o
+HLS local em MP4s de 10 min com a mesma retenção — só a *entrada* do streamer
+muda.
+
+### Configurando a câmera IP (icsee/yoosee)
+
+```dotenv
+DVR_MODO_OP=icsee            # icsee | yoosee
+DVR_IPCAM_HOST=192.168.1.15  # IP da câmera
+DVR_IPCAM_PORT=              # vazio = padrão do modo: icsee 34567 (preferida) | yoosee 554
+DVR_IPCAM_USER=admin
+DVR_IPCAM_PASS=sua_senha
+DVR_IPCAM_CHANNEL=1          # canal (NVR/1ª câmera)
+DVR_IPCAM_STREAM=0           # 0 = principal | 1 = secundário (menor resolução)
+```
+
+URLs geradas automaticamente (montadas em `app/config.py`):
+
+- **icsee/Xmeye** → `rtsp://user:senha@IP:34567/user=admin&password=senha&channel=1&stream=0.sdp?real_stream`
+  (o mesmo formato serve na 554; se sua câmera não servir RTSP na 34567, defina
+  `DVR_IPCAM_PORT=554`).
+- **yoosee** → `rtsp://user:senha@IP:554/onvif1` (`onvif2` quando `DVR_IPCAM_STREAM=1`).
+
+Caracteres especiais na senha são escapados automaticamente. Para firmwares
+exóticos, monte a URL na mão com `DVR_IPCAM_URL` (ela sobrescreve todas as
+outras; ex.: `rtsp://admin:senha@IP:10554/tcp/av0_0`). Senhas NUNCA aparecem em
+logs/APIs — sempre mascaradas como `***`.
+
+Detalhes úteis:
+
+- `DVR_IPCAM_TRANSPORT=tcp` (padrão) evita artefatos em Wi-Fi. `udp` pode dar
+  menos latência, mas perde pacotes.
+- `DVR_IPCAM_TRANSCODE=auto` (padrão): **copia** o H.264 da câmera; se você
+  configurar um preset de filtro (`DVR_IMAGE_PRESET`/`DVR_VIDEO_FILTERS`), o
+  streamer re-encoda com os filtros (e a gravação herda). `=1` força re-encode
+  sempre (pesado no Celeron N3350); `=0` nunca re-encode (filtros sem efeito).
+- Falha de RTSP aparece como `Connection refused`/`timed out` em
+  `docker compose logs -f dvr` e em `GET /healthz` (`hls_last_error`).
 
 ## Variáveis de ambiente
 
 | Variável | Padrão | Descrição |
 |---|---|---|
+| `DVR_MODO_OP` | `usb` | `usb` (webcam) \| `icsee` \| `yoosee` (câmera IP via RTSP) |
+| `DVR_IPCAM_HOST` | *(vazio)* | IP da câmera IP (aceita `ip` ou `ip:porta`) |
+| `DVR_IPCAM_PORT` | por modo | Porta RTSP: `icsee`→`34567` (preferida, alternativa 554), `yoosee`→`554` |
+| `DVR_IPCAM_USER` | `admin` | Usuário da câmera IP |
+| `DVR_IPCAM_PASS` | *(vazio)* | Senha da câmera IP (mesma do app iCSee/Yoosee) |
+| `DVR_IPCAM_CHANNEL` | `1` | Canal (NVR/1ª câmera) |
+| `DVR_IPCAM_STREAM` | `0` | `0` = fluxo principal, `1` = secundário |
+| `DVR_IPCAM_TRANSPORT` | `tcp` | Transporte RTSP (`tcp` é estável em Wi-Fi) |
+| `DVR_IPCAM_TRANSCODE` | `auto` | `auto`=copiar H.264 (re-encode só com filtro) \| `1` \| `0` |
+| `DVR_IPCAM_URL` | *(vazio)* | URL RTSP completa que sobrescreve tudo (firmwares exóticos) |
 | `DVR_USER` | `admin` | Usuário do HTTP Basic |
 | `DVR_PASSWORD` | `changeme` | Senha do HTTP Basic (**troque!**) |
 | `TZ` | `America/Sao_Paulo` | Fuso horário dos nomes/segmentos |
@@ -73,7 +137,9 @@ Acesse `http://IP-DO-SERVIDOR:2310`. O navegador pedirá usuário e senha
 ## Como testar cada funcionalidade
 
 - **Ao vivo:** abra `http://IP:2310` — o vídeo deve aparecer com o selo "AO VIVO".
-- **Gravação:** aguarde ~10 min e recarregue a lista de gravações; clique para baixar.
+- **Gravação:** aguarde ~10 min e recarregue a lista de gravações; clique em
+  **⬇ Baixar** (ou no nome do arquivo) para salvar o MP4 — inclusive o segmento
+  em gravação, que já abre por ser MP4 fragmentado.
 - **Retenção:** `docker compose exec dvr ls -lh /app/recordings` — no máximo ~24 h
   de arquivos; os mais antigos são apagados automaticamente.
 - **Túnel:** abra `http://IP:2310/tunnel`, ligue o toggle, aguarde a URL
@@ -111,9 +177,12 @@ segundos. A escolha vale até o container reiniciar (aí volta ao `DVR_IMAGE_PRE
 
 ### Diagnóstico rápido
 
-- `GET /healthz` → inclui `hls_last_error`/`rec_last_error` (última mensagem de cada
-  FFmpeg) e o preset/filtro ativos. É o primeiro lugar a olhar se aparecer
-  "Sem sinal da câmera".
+- `GET /healthz` → inclui `mode`/`camera` (modo ativo e fonte de vídeo),
+  `hls_last_error`/`rec_last_error` (última mensagem de cada FFmpeg) e o
+  preset/filtro ativos. É o primeiro lugar a olhar se aparecer "Sem sinal da
+  câmera".
+- `GET /api/camera/info` → modo, rótulo da câmera e URL RTSP ativa (senha
+  mascarada).
 - `GET /api/camera/controls` → controles V4L2 expostos pela câmera.
 - Se um filtro quebrar o stream, o backend **desativa os filtros automaticamente**
   e registra o motivo no log; ao reiniciar, volta a funcionar.
@@ -130,6 +199,10 @@ DVR_FRAMERATE=20
 DVR_X264_TUNE=               # vazio = melhor compressão, +~1s de latência no ao vivo
 ```
 
+> **No modo IP** a fonte é o H.264 da câmera: escolha o fluxo com
+> `DVR_IPCAM_STREAM` (`0` principal / `1` secundário) e, se o streamer estiver
+> re-encodando (com filtro), o bitrate do re-encode é `DVR_VIDEO_BITRATE`.
+
 As gravações usam **MP4 fragmentado**, portanto abrem normalmente **mesmo
 enquanto estão sendo gravadas** e sobrevivem a reinícios. O segmento em
 andamento aparece como "● gravando" na lista.
@@ -138,6 +211,12 @@ andamento aparece como "● gravando" na lista.
 
 - **Container único:** backend, FFmpeg e cloudflared juntos evitam problemas de
   permissão de dispositivo entre containers e simplificam o deploy.
+- **Modo de operação atrás de uma env** (`DVR_MODO_OP`): o pipeline único
+  (HLS -> remux MP4) não muda com a fonte; apenas a entrada do streamer troca
+  (v4l2 vs RTSP). Assim o modo USB original continua disponível sem regressão.
+- **No modo IP o H.264 da câmera é copiado (`-c copy`):** o Celeron N3350 não
+  re-encoda 720p/1080p em tempo real. Re-encode só ocorre sob demanda (filtros
+  de imagem), herdeiro do mesmo mecanismo do modo USB.
 - **Gravação lê o HLS (`-c copy`):** uma webcam USB só aceita **um** processo
   lendo o dispositivo. O gravador consome o stream HLS local em vez de abrir
   `/dev/video0` de novo — isso também evita um segundo encode e economiza CPU.

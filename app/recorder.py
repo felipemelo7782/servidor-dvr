@@ -55,9 +55,20 @@ class Recorder:
         self.last_stderr: Optional[str] = None  # diagnóstico
 
     # ------------------------------------------------------------------ FFmpeg
+    def _source(self) -> str:
+        """Fonte efetiva do gravador.
+
+        "device" só existe no modo USB (abrir o RTSP direto duplicaria sessões
+        na câmera e re-encode — desnecessário pois o HLS é remux 1:1). Nos modos
+        IP a fonte é sempre o loopback HLS, igual na prática ao USB.
+        """
+        if config.RECORD_SOURCE == "device" and config.MODO_OP == "usb":
+            return "device"
+        return "hls"
+
     def command(self) -> list[str]:
         """Monta o comando FFmpeg de gravação por segmentos."""
-        if config.RECORD_SOURCE == "device":
+        if self._source() == "device":
             fmt = ["-input_format", config.INPUT_FORMAT] if config.INPUT_FORMAT else []
             inputs = [
                 "-f", "v4l2", *fmt,
@@ -118,13 +129,16 @@ class Recorder:
         config.RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
         if self._running:
             return
+        if config.RECORD_SOURCE == "device" and config.MODO_OP != "usb":
+            log.warning("DVR_RECORD_SOURCE=device não se aplica a câmera IP "
+                        "(modo %s); gravando do HLS local", config.MODO_OP)
         self._running = True
         await self._spawn()
         self._watchdog = asyncio.create_task(self._guard(), name="rec-watchdog")
         self._retention_task = asyncio.create_task(self._retention_loop(), name="rec-retention")
 
     async def _spawn(self) -> None:
-        if config.RECORD_SOURCE == "device" and not os.path.exists(config.VIDEO_DEVICE):
+        if self._source() == "device" and not os.path.exists(config.VIDEO_DEVICE):
             log.error("Dispositivo %s ausente; gravação não iniciada", config.VIDEO_DEVICE)
             self._proc = None
             return

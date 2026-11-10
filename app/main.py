@@ -42,7 +42,20 @@ async def lifespan(app: FastAPI):
 
     if config.DVR_PASSWORD == "changeme":
         log.warning("DVR_PASSWORD não definido — usando o valor padrão 'changeme'!")
-    log.info("Fonte de gravação: %s", config.RECORD_SOURCE)
+    if config._MODO_RAW != config.MODO_OP:
+        log.warning("DVR_MODO_OP=%r inválido — use icsee|yoosee|usb; assumindo %r",
+                    config._MODO_RAW, config.MODO_OP)
+    log.info("Modo de operação: %s", config.MODO_OP)
+    if config.MODO_OP == "usb":
+        log.info("Câmera: %s", config.VIDEO_DEVICE)
+    else:
+        masked = config.ipcam_url_masked()
+        if masked:
+            log.info("Câmera IP: %s", masked)
+        else:
+            log.warning("Modo %s sem câmera IP configurada — defina DVR_IPCAM_HOST!",
+                        config.MODO_OP)
+    log.info("Fonte da gravação: %s", recorder._source())
 
     # Controles da câmera (brilho/exposição/IR) e filtros de imagem.
     await imaging.startup()
@@ -108,6 +121,8 @@ async def tunnel_page() -> FileResponse:
 async def healthz() -> dict:
     return {
         "ok": True,
+        "mode": config.MODO_OP,
+        "camera": config.camera_label(),
         "stream": streamer._proc is not None and streamer._proc.returncode is None,
         "recording": recorder._proc is not None and recorder._proc.returncode is None,
         "tunnel": tunnel.status()["state"],
@@ -117,6 +132,21 @@ async def healthz() -> dict:
         "rec_last_error": recorder.last_stderr,
         "preset": imaging.current_preset(),
         "filters": imaging.build_filter_chain(),
+    }
+
+
+# --------------------------------------------------- info da câmera ativa
+@app.get("/api/camera/info")
+async def camera_info() -> dict:
+    """Modo/fonte de vídeo ativa — usado pelo cabeçalho e por diagnósticos.
+
+    A senha nunca aparece aqui: ``url`` já vem mascarada (config.ipcam_url_masked).
+    """
+    return {
+        "mode": config.MODO_OP,
+        "camera": config.camera_label(),
+        "url": config.ipcam_url_masked(),
+        "record_source": recorder._source(),
     }
 
 
@@ -168,6 +198,7 @@ async def camera_controls() -> dict:
     """
     listing = await imaging.list_controls()
     return {
+        "mode": config.MODO_OP,
         "preset": imaging.current_preset(),
         "presets": imaging.available_presets(),
         "filters": imaging.build_filter_chain(),

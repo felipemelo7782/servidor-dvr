@@ -26,6 +26,18 @@
     return `${h}:${m}:${s}`;
   };
 
+  // ------------------------------------- página principal: info da câmera
+  const camLabel = document.getElementById("cam-label");
+  if (camLabel) {
+    // Mostra no topo a fonte ativa (device USB ou câmera IP host:porta).
+    fetch("/api/camera/info", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((info) => {
+        if (info && info.camera) camLabel.textContent = info.camera;
+      })
+      .catch(() => {});
+  }
+
   // ------------------------------------- página principal: player HLS
   const video = document.getElementById("live-video");
   if (video) {
@@ -117,8 +129,9 @@
         recList.innerHTML = items
           .map(
             (it) =>
-              `<li><a class="rec-link" href="${it.url}" download>${it.filename}</a>` +
-              `<span class="rec-meta">${it.active ? "● gravando · " : ""}${fmtBytes(it.size)}</span></li>`
+              `<li class="rec-row"><a class="rec-link" href="${it.url}" download>${it.filename}</a>` +
+              `<div class="rec-right"><span class="rec-meta">${it.active ? "● gravando · " : ""}${fmtBytes(it.size)}</span>` +
+              `<a class="btn small" href="${it.url}" download>⬇ Baixar</a></div></li>`
           )
           .join("");
       } catch (e) {

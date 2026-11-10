@@ -159,12 +159,18 @@ async def validate_chain(chain: str) -> bool:
 
 async def startup() -> None:
     """Logue os controles disponíveis, aplique os configurados e valide filtros."""
-    listing = await list_controls()
-    if listing is None:
-        log.info("v4l2-ctl indisponível ou câmera ausente; sem controles V4L2")
+    if config.MODO_OP == "usb":
+        listing = await list_controls()
+        if listing is None:
+            log.info("v4l2-ctl indisponível ou câmera ausente; sem controles V4L2")
+        else:
+            log.info("Controles da câmera disponíveis:\n%s", listing.strip())
+        await apply_controls()
     else:
-        log.info("Controles da câmera disponíveis:\n%s", listing.strip())
-    await apply_controls()
+        # Controles V4L2 são hardware de webcam (/dev/video0); numa câmera IP
+        # não se aplicam (ajustes de imagem vão em DVR_IMAGE_PRESET/filtros FFmpeg).
+        log.info("Modo %s: sem controles V4L2 (use DVR_IMAGE_PRESET/DVR_VIDEO_FILTERS)",
+                 config.MODO_OP)
 
     chain = build_filter_chain()
     if chain and not await validate_chain(chain):

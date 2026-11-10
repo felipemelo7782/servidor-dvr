@@ -1,12 +1,14 @@
 """Pipeline HLS ao vivo.
 
-Um único processo FFmpeg persistente lê /dev/video0 e escreve segmentos HLS em
-``HLS_DIR/stream.m3u8``. Um watchdog reinicia o processo se ele morrer (câmera
-desconectada, erro de driver, etc.).
+No modo USB, um único processo FFmpeg persistente lê /dev/video0 e escreve
+segmentos HLS em ``HLS_DIR/stream.m3u8``. Nos modos IP (icsee/yoosee) o mesmo
+processo lê a câmera via RTSP — o restante do pipeline é idêntico. Um watchdog
+reinicia o processo se ele morrer (câmera desconectada, erro de driver, etc.).
 
 Este é o ÚNICO processo que abre a câmera. O gravador (recorder.py) consome o
 HLS gerado aqui em vez de abrir /dev/video0 de novo — webcams USB (uvcvideo)
-normalmente só permitem um consumidor por vez.
+normalmente só permitem um consumidor por vez (e com RTSP o remux do HLS segue
+mais simples e estável).
 """
 from __future__ import annotations
 
@@ -24,6 +26,9 @@ log = logging.getLogger("dvr.streamer")
 RESTART_DELAY = 3.0        # espera entre tentativas de reinício
 MAX_RESTART_DELAY = 30.0   # teto do backoff (evita loop apertado que trava a CPU)
 QUICK_EXIT = 10.0          # se morrer em menos de X s, dobra o backoff
+# Se a câmera IP parar de responder, o FFmpeg fica preso na leitura TCP. Este
+# timeout de I/O (10 s, microssegundos) faz ele morrer e o watchdog reiniciar.
+IPCAM_RW_TIMEOUT_US = "10000000"
 
 
 class HlsStreamer:
@@ -36,7 +41,13 @@ class HlsStreamer:
         self.last_stderr: Optional[str] = None  # última linha do FFmpeg (diagnóstico)
 
     def command(self) -> list[str]:
-        """Monta o comando FFmpeg do HLS ao vivo.
+        """Despacha o comando FFmpeg conforme o modo de operação."""
+        if config.MODO_OP == "usb":
+            return self._usb_command()
+        return self._ipcam_command()
+
+    def _usb_command(self) -> list[str]:
+        """Monta o comando FFmpeg do HLS ao vivo (webcam USB).
 
         Os filtros de imagem (preset + DVR_VIDEO_FILTERS) entram aqui. Como a
         gravação é um remux deste HLS, ela herda os mesmos filtros sem custo
@@ -78,6 +89,55 @@ class HlsStreamer:
         ]
         return cmd
 
+    def _ipcam_command(self) -> list[str]:
+        """Monta o comando FFmpeg do HLS ao vivo (câmera IP icsee/yoosee).
+
+        A câmera já entrega H.264, então por padrão o stream é apenas COPIADO
+        para o HLS (-c copy): no Celeron N3350 o re-encode é caro e desnecessá-
+        rio. Se houver preset de filtro configurado (ou DVR_IPCAM_TRANSCODE=1),
+        re-encode com os filtros — assim a gravação (remux do HLS) continua
+        herdando exatamente a mesma imagem.
+        """
+        url = config.ipcam_url()
+        transport = config.IPCAM_TRANSPORT
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin"]
+        if transport == "tcp":
+            # TCP: sem artefatos de rede em Wi-Fi/PLC (UDP perde pacotes).
+            cmd += ["-rtsp_transport", "tcp"]
+        cmd += ["-rw_timeout", IPCAM_RW_TIMEOUT_US, "-i", url, "-an"]
+
+        tr = config.IPCAM_TRANSCODE
+        filters = imaging.build_filter_chain()
+        transcode = tr in {"1", "true", "yes", "on", "force"} or (
+            filters is not None and tr not in {"0", "false", "no", "off"}
+        )
+        if transcode:
+            if filters:
+                cmd += ["-vf", filters]
+            cmd += ["-c:v", "libx264", "-preset", config.X264_PRESET_LIVE]
+            if config.X264_TUNE:
+                cmd += ["-tune", config.X264_TUNE]
+            # Sem -s/-r de propósito: a resolução/fps vem da câmera (impor 640x480
+            # escondido rebaixaria a imagem do usuário). O bitrate continua o knob
+            # DVR_VIDEO_BITRATE para manter a consistência com o modo USB.
+            cmd += [
+                "-b:v", config.VIDEO_BITRATE,
+                "-g", str(max(1, config.FRAMERATE * 2)),
+                "-pix_fmt", "yuv420p",
+            ]
+        else:
+            cmd += ["-c:v", "copy"]
+
+        cmd += [
+            "-f", "hls",
+            "-hls_time", "2",
+            "-hls_list_size", "5",
+            "-hls_flags", "delete_segments+append_list",
+            "-hls_segment_filename", str(config.HLS_DIR / "seg_%03d.ts"),
+            str(config.HLS_DIR / "stream.m3u8"),
+        ]
+        return cmd
+
     async def start(self) -> None:
         config.HLS_DIR.mkdir(parents=True, exist_ok=True)
         if self._running:
@@ -87,16 +147,26 @@ class HlsStreamer:
         self._watchdog = asyncio.create_task(self._guard(), name="hls-watchdog")
 
     async def _spawn(self) -> None:
-        if not os.path.exists(config.VIDEO_DEVICE):
-            log.error("Dispositivo %s ausente; stream HLS não iniciado", config.VIDEO_DEVICE)
-            self._proc = None
-            return
+        if config.MODO_OP == "usb":
+            if not os.path.exists(config.VIDEO_DEVICE):
+                log.error("Dispositivo %s ausente; stream HLS não iniciado",
+                          config.VIDEO_DEVICE)
+                self._proc = None
+                return
+        else:
+            if not config.ipcam_url():
+                log.error("Câmera IP não configurada (defina DVR_IPCAM_HOST); "
+                          "stream HLS não iniciado (modo %s)", config.MODO_OP)
+                self._proc = None
+                return
+            log.info("Fonte ao vivo: %s", config.ipcam_url_masked())
         # Cancela o leitor de stderr anterior (se houver) antes de abrir outro.
         if self._stderr_task:
             self._stderr_task.cancel()
             self._stderr_task = None
         cmd = self.command()
-        log.info("Iniciando FFmpeg HLS: %s", " ".join(cmd))
+        # O comando pode conter a URL RTSP com credenciais: SEMPRE logar mascarado.
+        log.info("Iniciando FFmpeg HLS: %s", config.mask_secrets(" ".join(cmd)))
         try:
             self._proc = await asyncio.create_subprocess_exec(
                 *cmd,

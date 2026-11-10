@@ -22,6 +22,31 @@ services:
       DVR_PASSWORD: ${DVR_PASSWORD:-changeme}
       TZ: ${TZ:-America/Sao_Paulo}
 
+      # ---------------------------------------------------------------
+      # MODO DE OPERAÇÃO — escolhe a fonte do vídeo:
+      #   usb    = webcam /dev/video0 (original)
+      #   icsee  = câmera IP iCSee/Xmeye via RTSP (porta NET 34567 ou 554)
+      #   yoosee = câmera IP Yoosee via RTSP (554, fluxos onvif1/onvif2)
+      # No modo usb a maquina PRECISA ter /dev/video0 (bloco `devices` abaixo).
+      # No modo icsee/yoosee SEM webcam instalada, use o docker-compose.ipcam.yml
+      # (variante sem o device) ou remova os blocos `devices`/`group_add`.
+      # ---------------------------------------------------------------
+      DVR_MODO_OP: ${DVR_MODO_OP:-usb}
+
+      # --- Câmera IP (icsee/yoosee) ---
+      DVR_IPCAM_HOST: ${DVR_IPCAM_HOST:-}
+      DVR_IPCAM_PORT: ${DVR_IPCAM_PORT:-}
+      DVR_IPCAM_USER: ${DVR_IPCAM_USER:-admin}
+      DVR_IPCAM_PASS: ${DVR_IPCAM_PASS:-}
+      DVR_IPCAM_CHANNEL: ${DVR_IPCAM_CHANNEL:-}
+      DVR_IPCAM_STREAM: ${DVR_IPCAM_STREAM:-}
+      DVR_IPCAM_TRANSPORT: ${DVR_IPCAM_TRANSPORT:-tcp}
+      # auto (padrão) | 1 (sempre re-encode) | 0 (nunca — filtros digitais off)
+      DVR_IPCAM_TRANSCODE: ${DVR_IPCAM_TRANSCODE:-auto}
+      # Sobrescreve a URL RTSP inteira (firmwares exóticos). Senha em texto;
+      # mantenha este valor só no .env.
+      DVR_IPCAM_URL: ${DVR_IPCAM_URL:-}
+
       # --- Qualidade de imagem/gravação (ajuste pelo painel) ---
       DVR_VIDEO_SIZE: ${DVR_VIDEO_SIZE:-640x480}
       DVR_VIDEO_BITRATE: ${DVR_VIDEO_BITRATE:-1200k}
@@ -44,7 +69,6 @@ services:
       DVR_SEGMENT_SECONDS: ${DVR_SEGMENT_SECONDS:-600}
       DVR_RETENTION_SECONDS: ${DVR_RETENTION_SECONDS:-86400}
       DVR_TUNNEL_TTL: ${DVR_TUNNEL_TTL:-14400}
-
     volumes:
       # Gravações persistentes no host (MP4). Cuidado com o tamanho em disco.
       - ./recordings:/app/recordings
