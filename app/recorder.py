@@ -163,12 +163,14 @@ class Recorder:
         self._stderr_task = asyncio.create_task(self._drain(self._proc), name="rec-stderr")
 
     async def _drain(self, proc: asyncio.subprocess.Process) -> None:
+        # mask_secrets por simetria: hoje a fonte do gravador é um loopback sem
+        # credenciais, mas se puder vir a contê-las, a linha não deve vazá-las.
         assert proc.stderr is not None
         async for raw in proc.stderr:
             line = raw.decode(errors="replace").rstrip()
             if line:
-                self.last_stderr = line
-                log.info("[rec/ffmpeg] %s", line)
+                self.last_stderr = config.mask_secrets(line)
+                log.info("[rec/ffmpeg] %s", self.last_stderr)
 
     async def _guard(self) -> None:
         delay = RESTART_DELAY

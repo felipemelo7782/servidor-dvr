@@ -187,13 +187,17 @@ class HlsStreamer:
 
         Logado em INFO (não DEBUG): com ``-loglevel warning`` o volume é baixo e,
         quando algo quebra, é exatamente aqui que aparece o motivo.
+
+        As linhas do FFmpeg podem ECOAR a URL RTSP de erro com senha (ex.:
+        "Invalid data found ...: rtsp://user:senha@host/..."). Mascarar antes de
+        logar e antes de expor em self.last_stderr (/healthz).
         """
         assert proc.stderr is not None
         async for raw in proc.stderr:
             line = raw.decode(errors="replace").rstrip()
             if line:
-                self.last_stderr = line
-                log.info("[hls/ffmpeg] %s", line)
+                self.last_stderr = config.mask_secrets(line)
+                log.info("[hls/ffmpeg] %s", self.last_stderr)
 
     async def _guard(self) -> None:
         """Reinicia o FFmpeg quando ele morre, com backoff exponencial.
