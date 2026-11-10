@@ -76,24 +76,36 @@ muda.
 ```dotenv
 DVR_MODO_OP=icsee            # icsee | yoosee
 DVR_IPCAM_HOST=192.168.1.15  # IP da câmera
-DVR_IPCAM_PORT=              # vazio = padrão do modo: icsee 34567 (preferida) | yoosee 554
+DVR_IPCAM_PORT=              # vazio = padrão do modo: icsee 554 | yoosee 554
 DVR_IPCAM_USER=admin
 DVR_IPCAM_PASS=sua_senha
-DVR_IPCAM_CHANNEL=1          # canal (NVR/1ª câmera)
+DVR_IPCAM_CHANNEL=1          # canal do RTSP (1 = 1ª câmera; no app iCSee ela é "0")
 DVR_IPCAM_STREAM=0           # 0 = principal | 1 = secundário (menor resolução)
 ```
 
 URLs geradas automaticamente (montadas em `app/config.py`):
 
-- **icsee/Xmeye** → `rtsp://user:senha@IP:34567/user=admin&password=senha&channel=1&stream=0.sdp?real_stream`
-  (o mesmo formato serve na 554; se sua câmera não servir RTSP na 34567, defina
-  `DVR_IPCAM_PORT=554`).
+- **icsee/Xmeye** → `rtsp://user:senha@IP:554/user=admin&password=senha&channel=1&stream=0.sdp?real_stream`
+  (formato oficial do Xiongmai; cuidado com a porta **34567 — é o port "DVRIP/media"
+  do app iCSee, não serve RTSP**; e o canal do RTSP é 1-based).
 - **yoosee** → `rtsp://user:senha@IP:554/onvif1` (`onvif2` quando `DVR_IPCAM_STREAM=1`).
 
 Caracteres especiais na senha são escapados automaticamente. Para firmwares
 exóticos, monte a URL na mão com `DVR_IPCAM_URL` (ela sobrescreve todas as
 outras; ex.: `rtsp://admin:senha@IP:10554/tcp/av0_0`). Senhas NUNCA aparecem em
-logs/APIs — sempre mascaradas como `***`.
+logs/APIs — sempre mascaradas como `***`. Definir `DVR_IPCAM_URL` desliga o
+auto-probe (abaixo).
+
+### Auto-probe da câmera IP (DVR_AUTO_PROBE, padrão ligado nos modos IP)
+
+Se o FFmpeg falhar 3× seguidas ao abrir a câmera, o DVR testa com `ffprobe`
+uma lista curta de combinações porta/canal — entre elas `554/1`, `554/0` e
+`34567/1` — e usa a primeira que responder, registrando em memória (um redeploy
+volta a respeitar o env). O resultado aparece no log como `auto-probe: RTSP
+ABRIU em porta 554 canal 1` e o `/healthz` marca o rótulo `(auto-probe)`.
+Câmera cloud-only (sem RTSP válido de jeito nenhum)? O log indica usar uma
+ponte **dvrip:// → RTSP** (ex.: [go2rtc](https://github.com/AlexxIT/go2rtc))
+e apontar `DVR_IPCAM_URL` para ela. `DVR_AUTO_PROBE=0` desliga.
 
 Detalhes úteis:
 
@@ -112,14 +124,15 @@ Detalhes úteis:
 |---|---|---|
 | `DVR_MODO_OP` | `usb` | `usb` (webcam) \| `icsee` \| `yoosee` (câmera IP via RTSP) |
 | `DVR_IPCAM_HOST` | *(vazio)* | IP da câmera IP (aceita `ip` ou `ip:porta`) |
-| `DVR_IPCAM_PORT` | por modo | Porta RTSP: `icsee`→`34567` (preferida, alternativa 554), `yoosee`→`554` |
+| `DVR_IPCAM_PORT` | por modo | Porta RTSP: `icsee`→`554`, `yoosee`→`554` (a 34567 é o port do app iCSee, não RTSP) |
 | `DVR_IPCAM_USER` | `admin` | Usuário da câmera IP |
 | `DVR_IPCAM_PASS` | *(vazio)* | Senha da câmera IP (mesma do app iCSee/Yoosee) |
 | `DVR_IPCAM_CHANNEL` | `1` | Canal (NVR/1ª câmera) |
 | `DVR_IPCAM_STREAM` | `0` | `0` = fluxo principal, `1` = secundário |
 | `DVR_IPCAM_TRANSPORT` | `tcp` | Transporte RTSP (`tcp` é estável em Wi-Fi) |
 | `DVR_IPCAM_TRANSCODE` | `auto` | `auto`=copiar H.264 (re-encode só com filtro) \| `1` \| `0` |
-| `DVR_IPCAM_URL` | *(vazio)* | URL RTSP completa que sobrescreve tudo (firmwares exóticos) |
+| `DVR_AUTO_PROBE` | `1` | Modos IP: após 3 falhas do FFmpeg, testa porta/canal com `ffprobe` e usa a 1ª que abrir |
+| `DVR_IPCAM_URL` | *(vazio)* | URL RTSP completa que sobrescreve tudo (firmwares exóticos) — desliga o auto-probe |
 | `DVR_USER` | `admin` | Usuário do HTTP Basic |
 | `DVR_PASSWORD` | `changeme` | Senha do HTTP Basic (**troque!**) |
 | `TZ` | `America/Sao_Paulo` | Fuso horário dos nomes/segmentos |

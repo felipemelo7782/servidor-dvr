@@ -26,7 +26,8 @@ services:
       #   usb    = webcam /dev/video0 (OBRIGATÓRIO descomentar o bloco
       #            devices/group_add no fim do arquivo, senão o container
       #            nem sobe — e o stream fica "sem sinal")
-      #   icsee  = câmera IP iCSee/Xmeye via RTSP (porta NET 34567 ou 554)
+      #   icsee  = câmera IP Xiongmai/iCSee/Xmeye via RTSP na 554 (a 34567 é o
+      #            port do app iCSee/DVRIP, não serve RTSP)
       #   yoosee = câmera IP Yoosee via RTSP (554, fluxos onvif1/onvif2)
       # ---------------------------------------------------------------
       DVR_MODO_OP: ${DVR_MODO_OP:-usb}
@@ -41,8 +42,12 @@ services:
       DVR_IPCAM_TRANSPORT: ${DVR_IPCAM_TRANSPORT:-tcp}
       # auto (padrão) | 1 (sempre re-encode) | 0 (nunca — filtros digitais off)
       DVR_IPCAM_TRANSCODE: ${DVR_IPCAM_TRANSCODE:-auto}
+      # Auto-probe (modos IP): após 3 falhas rápidas seguidas do FFmpeg, testa
+      # combinações porta/canal conhecidas (554/1 etc.) com ffprobe e usa a
+      # primeira que abrir. 0 = desliga (vamos encontrar a URL manual).
+      DVR_AUTO_PROBE: ${DVR_AUTO_PROBE:-1}
       # Sobrescreve a URL RTSP inteira (firmwares exóticos). Senha em texto;
-      # mantenha este valor só no .env.
+      # mantenha este valor só no .env. Defini-la desliga o auto-probe.
       DVR_IPCAM_URL: ${DVR_IPCAM_URL:-}
 
       # --- Qualidade de imagem/gravação (ajuste pelo painel) ---

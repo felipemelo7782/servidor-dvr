@@ -29,6 +29,10 @@ apenas como checagem de sintaxe.
   Watchdog reinicia se cair. Nos modos IP o H.264 da câmera é copiado (`-c copy`);
   re-encode só se houver preset de filtro (então a gravação também herda).
 - `app/recorder.py` — FFmpeg gera MP4 em `/app/recordings` + task de retenção.
+- `app/probe.py` — auto-probe NOS MODOS IP: após 3 mortes rápidas do FFmpeg,
+  testa porta/canal com `ffprobe` e registra a URL vencedora em memória
+  (`config.set_ipcam_override`). Nunca roda no `usb`; `DVR_IPCAM_URL` definido
+  o desliga; um boot novo zera o override (env vence).
 - `app/tunnel.py` — subprocesso `cloudflared`, URL raspada do stderr, TTL 4 h.
 - `app/config.py` — **único** lugar que lê variáveis de ambiente.
 - `app/imaging.py` — presets de filtro (`DVR_IMAGE_PRESET`), filtros FFmpeg livres
@@ -45,11 +49,13 @@ apenas como checagem de sintaxe.
   câmera suportar múltiplas aberturas. Nos modos IP (`DVR_MODO_OP=icsee/yoosee`)
   `device` nem é aceito: o gravador força o remux do HLS (avisa no log).
 - **Modo IP:** o modo é `DVR_MODO_OP` (usb|icsee|yoosee, lido só em `config.py`,
-  que também monta a URL RTSP: icsee usa porta padrão 34567, yoosee 554 + `/onvif1`).
-  `DVR_IPCAM_URL` sobrescreve tudo. Nos modos IP o streamer copia o H.264 da
-  câmera (`-c copy`); se houver preset de filtro, re-encode automaticamente e a
-  gravação herda os filtros via HLS (mesma mecânica do modo USB). A URL em logs
-  e APIs (`/healthz`, `/api/camera/info`) é SEMPRE mascarada — não desmascare.
+  que também monta a URL RTSP: icsee porta padrão 554 — a 34567 é o port do app
+  iCSee/DVRIP, não RTSP —, yoosee 554 + `/onvif1`; canal do RTSP Xiongmai é
+  1-based). `DVR_IPCAM_URL` sobrescreve tudo e desliga o auto-probe. Nos modos
+  IP o streamer copia o H.264 da câmera (`-c copy`); se houver preset de
+  filtro, re-encode automaticamente e a gravação herda os filtros via HLS
+  (mesma mecânica do modo USB). A URL em logs e APIs (`/healthz`,
+  `/api/camera/info`) é SEMPRE mascarada — não desmascare.
 - **Compose e /dev/video0:** o bloco `devices:` vem **comentado** no compose
   (padrão = câmera IP). Descomente `devices`/`group_add` SÓ quando
   `DVR_MODO_OP=usb` em host com webcam — o Docker falha ao criar o container

@@ -18,7 +18,7 @@ import os
 import time
 from typing import Optional
 
-from . import config, imaging
+from . import config, imaging, probe
 from .procutils import terminate_process
 
 log = logging.getLogger("dvr.streamer")
@@ -26,9 +26,17 @@ log = logging.getLogger("dvr.streamer")
 RESTART_DELAY = 3.0        # espera entre tentativas de reinício
 MAX_RESTART_DELAY = 30.0   # teto do backoff (evita loop apertado que trava a CPU)
 QUICK_EXIT = 10.0          # se morrer em menos de X s, dobra o backoff
+PROBE_AFTER = 3            # mortes rápidas seguidas antes de chamar o auto-probe
 # Se a câmera IP parar de responder, o FFmpeg fica preso na leitura TCP. Este
 # timeout de I/O (10 s, microssegundos) faz ele morrer e o watchdog reiniciar.
 IPCAM_RW_TIMEOUT_US = "10000000"
+
+# Dica exibida UMA vez por processo quando o FFmpeg não consegue abrir a câmera.
+IPCAM_HINT = ("modo IP: 'Invalid data'/'Connection refused' na câmera costuma "
+              "significar RTSP desligado ou porta/canal errados — no "
+              "Xiongmai/iCSee o RTSP fica na 554 (a 34567 é o protocolo do "
+              "app), o canal do RTSP começa em 1 e existe a chave 'RTSP "
+              "server' no app da câmera. Verifique também o IP/host.")
 
 
 class HlsStreamer:
@@ -38,6 +46,8 @@ class HlsStreamer:
         self._stderr_task: Optional[asyncio.Task] = None
         self._running = False
         self._started_at: float = 0.0
+        self._probed = False    # auto-probe já tentado nesta vida do processo?
+        self._hinted = False    # dica de diagnóstico (IPCAM_HINT) já exibida?
         self.last_stderr: Optional[str] = None  # última linha do FFmpeg (diagnóstico)
 
     def command(self) -> list[str]:
@@ -198,15 +208,21 @@ class HlsStreamer:
             if line:
                 self.last_stderr = config.mask_secrets(line)
                 log.info("[hls/ffmpeg] %s", self.last_stderr)
+                if (config.MODO_OP != "usb" and not self._hinted
+                        and ("nvalid data" in line or "onnection" in line)):
+                    self._hinted = True
+                    log.warning("Diagnóstico: %s", IPCAM_HINT)
 
     async def _guard(self) -> None:
         """Reinicia o FFmpeg quando ele morre, com backoff exponencial.
 
         O backoff evita que uma falha persistente (ex.: filtro inválido, câmera
         ocupada) gere um loop de reinício a cada 3 s que consome a CPU inteira de
-        um Celeron.
+        um Celeron. Nos modos IP, 3 mortes rápidas em sequência disparam o
+        auto-probe de porta/canal (probe.run_probe) — uma tentativa por boot.
         """
         delay = RESTART_DELAY
+        consec_quick = 0  # mortes rápidas seguidas (disparam o auto-probe)
         while self._running:
             await asyncio.sleep(delay)
             if not self._running:
@@ -214,13 +230,26 @@ class HlsStreamer:
             proc = self._proc
             if proc is None or proc.returncode is not None:
                 lived = time.monotonic() - self._started_at if self._started_at else 0.0
-                delay = min(delay * 2, MAX_RESTART_DELAY) if lived < QUICK_EXIT else RESTART_DELAY
+                died_quick = lived < QUICK_EXIT
+                delay = (min(delay * 2, MAX_RESTART_DELAY) if died_quick
+                         else RESTART_DELAY)
+                consec_quick = consec_quick + 1 if died_quick else 0
                 code = None if proc is None else proc.returncode
                 log.warning("FFmpeg HLS encerrou (código=%s, viveu %.1fs); "
                             "reiniciando em %.0fs", code, lived, delay)
+                if config.MODO_OP != "usb" and not self._probed \
+                        and consec_quick >= PROBE_AFTER:
+                    self._probed = True
+                    log.info("FFmpeg falhou %d vezes seguidas: tentando "
+                             "auto-probe de porta/canal da câmera",
+                             consec_quick)
+                    if await probe.run_probe():
+                        # Override registrado: logos abaixo já apontam p/ nova URL.
+                        delay = RESTART_DELAY
                 await self._spawn()
             else:
                 delay = RESTART_DELAY
+                consec_quick = 0
 
     async def restart(self) -> None:
         """Reinicia o FFmpeg (usado ao trocar filtros em tempo de execução)."""

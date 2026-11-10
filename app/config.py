@@ -36,7 +36,8 @@ RECORDINGS_DIR = Path(os.getenv("RECORDINGS_DIR", "/app/recordings"))
 # --- Modo de operação -------------------------------------------------------
 # Escolhe a FONTE do vídeo (uma câmera por vez):
 #   usb    -> webcam USB em VIDEO_DEVICE (v4l2) — comportamento original.
-#   icsee  -> câmera IP via RTSP, protocolo iCSee/Xmeye (porta NET 34567 ou 554).
+#   icsee  -> câmera IP via RTSP "estilo Xiongmai" (RTSP na 554; a 34567 é o
+#             protocolo do app iCSee/Xmeye — DVRIP — e NÃO é RTSP).
 #   yoosee -> câmera IP via RTSP, fluxos onvif1/onvif2 do Yoosee (porta 554).
 # Os modos IP seguem o MESMO pipeline do USB: só muda a entrada do FFmpeg no
 # streamer; o gravador continua remuxando o HLS local, idêntico na prática.
@@ -44,10 +45,10 @@ _MODO_ALIASES = {"xmeye": "icsee", "icsee": "icsee", "yoosee": "yoosee", "usb": 
 _MODO_RAW = os.getenv("DVR_MODO_OP", os.getenv("MODO_OP", "usb")).strip().lower()
 MODO_OP = _MODO_ALIASES.get(_MODO_RAW, "usb")
 
-# Porta RTSP padrão por modo. No iCSee/Xmeye o RTSP costuma servir tanto na
-# 554 clássica quanto na porta "NET" 34567 (preferida, segue o pedido do host);
-# Yoosee só expõe na 554. Sempre sobrescrevível com DVR_IPCAM_PORT.
-_DEFAULT_IPCAM_PORT = {"icsee": 34567, "yoosee": 554}
+# Porta RTSP padrão por modo. No Xiongmai/iCSee o RTSP vive na porta clássica
+# 554 (a 34567 é o "media/DVRIP port" do app, que não fala RTSP); Yoosee idem.
+# Sempre sobrescrevível com DVR_IPCAM_PORT.
+_DEFAULT_IPCAM_PORT = {"icsee": 554, "yoosee": 554}
 
 # --- Câmera IP (usada só quando MODO_OP != "usb") ---------------------------
 # DVR_IPCAM_HOST aceita "192.168.1.10", "192.168.1.10:34567" ou "rtsp://ip:554".
@@ -83,9 +84,16 @@ IPCAM_TRANSPORT = os.getenv("DVR_IPCAM_TRANSPORT", "tcp").strip().lower()
 # 1     = força re-encode sempre (mais pesado no Celeron).
 # 0     = nunca re-encode (filtros DIGITAIS ficam desativados neste modo).
 IPCAM_TRANSCODE = os.getenv("DVR_IPCAM_TRANSCODE", "auto").strip().lower()
-# URL RTSP completa que sobrescreve tudo acima (lista branca para firmwares
-# exóticos). Ex.: rtsp://admin:senha@ip:34567/user=admin&password=senha&channel=1&stream=0.sdp?real_stream
+# URL RTSP completa que sobrescreve tudo acima (válvula de escape para
+# firmwares exóticos; NELA o canal também é 1). Ex.: rtsp://admin:senha@ip:554/user=admin&password=senha&channel=1&stream=0.sdp?real_stream
 IPCAM_URL_OVERRIDE = os.getenv("DVR_IPCAM_URL", "").strip()
+# DVR_AUTO_PROBE (modos IP): após 3 falhas rápidas seguidas do FFmpeg, testa
+# combinações porta/canal conhecidas com ffprobe e usa a primeira que abrir.
+# DVR_IPCAM_URL definido desliga o efeito (o usuário já decidiu a URL).
+AUTO_PROBE = _env_bool("DVR_AUTO_PROBE", True)
+# URL vencedora do auto-probe: vive SÓ em memória (estilo o preset de imagem) e
+# morre com o container — a próxima reinicialização volta a respeitar o env.
+_ipcam_override: str | None = None
 
 # --- Câmera / FFmpeg -------------------------------------------------------
 VIDEO_DEVICE = os.getenv("VIDEO_DEVICE", "/dev/video0")
@@ -147,28 +155,52 @@ if hasattr(time, "tzset"):  # não existe no Windows, irrelevante em produção
 
 
 # ----------------------------------------------------- URL RTSP da câmera IP
+def set_ipcam_override(url: str | None) -> None:
+    """Define/limpa a URL vencedora do auto-probe (estado em memória).
+
+    Só tem efeito quando DVR_IPCAM_URL não está definido — a variável de env
+    é SEMPRE a última palavra (o probe não derruba uma escolha manual).
+    """
+    global _ipcam_override
+    _ipcam_override = url
+
+
 def ipcam_url() -> str | None:
     """Monta a URL RTSP da câmera IP conforme o modo; None se não configurada.
 
-    Com DVR_IPCAM_URL definido, ela é usada verbatim (última palavra para
-    firmwares exóticos). Senão:
-      icsee/xmeye -> rtsp://user:pass@host:porta/user=U&password=P&channel=1&stream=0.sdp?real_stream
-                     (o mesmo formato serve na 554 clássica e na porta NET 34567)
+    Precedência: DVR_IPCAM_URL (env, verbatim) > URL do auto-probe (memória) >
+    URL montada das DVR_IPCAM_*:
+      icsee/xmeye -> rtsp://user:pass@host:554/user=U&password=P&channel=1&stream=0.sdp?real_stream
+                     (RTSP do Xiongmai; o canal é 1-based — 34567 é o port do
+                      app/DVRIP e não aparece aqui)
       yoosee      -> rtsp://user:pass@host:554/onvif1  (onvif2 = fluxo secundário)
     """
     if IPCAM_URL_OVERRIDE:
         return IPCAM_URL_OVERRIDE
+    if _ipcam_override:
+        return _ipcam_override
+    if MODO_OP == "usb" or not IPCAM_HOST:
+        return None
+    return ipcam_url_for(IPCAM_PORT, IPCAM_CHANNEL)
+
+
+def ipcam_url_for(port: int, channel: int) -> str | None:
+    """Monta a URL RTSP para uma porta/canal específicos (usada pelo auto-probe).
+
+    Ignora ambos os overrides — sempre variação canônica do env. No modo yoosee
+    o canal é ignorado (o streams são onvif1/onvif2, caminho fixo). None fora
+    dos modos IP.
+    """
     if MODO_OP == "usb" or not IPCAM_HOST:
         return None
     user = quote(IPCAM_USER, safe="")
     pwd = quote(IPCAM_PASS, safe="")
     if MODO_OP == "yoosee":
-        return f"rtsp://{user}:{pwd}@{IPCAM_HOST}:{IPCAM_PORT}/onvif{IPCAM_STREAM + 1}"
-    # icsee (também aceito por iCSee "puros" e clones Xmeye):
-    # as credenciais entram no userinfo E na query — firmwares às vezes exigem
-    # só um dos dois.
-    return (f"rtsp://{user}:{pwd}@{IPCAM_HOST}:{IPCAM_PORT}/"
-            f"user={user}&password={pwd}&channel={IPCAM_CHANNEL}"
+        return f"rtsp://{user}:{pwd}@{IPCAM_HOST}:{port}/onvif{IPCAM_STREAM + 1}"
+    # icsee (também aceito por iCSee "puro" e clones Xmeye): credenciais no
+    # userinfo E na query — firmwares às vezes exigem só um dos dois.
+    return (f"rtsp://{user}:{pwd}@{IPCAM_HOST}:{port}/"
+            f"user={user}&password={pwd}&channel={channel}"
             f"&stream={IPCAM_STREAM}.sdp?real_stream")
 
 
@@ -203,4 +235,9 @@ def camera_label() -> str:
     """Rótulo curto da câmera ativa (topbar/healthz), sem segredos."""
     if MODO_OP == "usb":
         return VIDEO_DEVICE
-    return f"{MODO_OP} · {IPCAM_HOST or '?'}:{IPCAM_PORT}"
+    label = f"{MODO_OP} · {IPCAM_HOST or '?'}:{IPCAM_PORT}"
+    if IPCAM_URL_OVERRIDE:
+        label += " (URL manual)"
+    elif _ipcam_override:
+        label += " (auto-probe)"
+    return label
